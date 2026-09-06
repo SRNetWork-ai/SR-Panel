@@ -1,0 +1,177 @@
+@import "tailwindcss";
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+:root {
+  --background: #f5f5fa;
+  --foreground: #0b0b14;
+  --aurora-violet: #8b5cf6;
+  --aurora-cyan: #22d3ee;
+  --aurora-magenta: #e879f9;
+  --glass-bg: rgba(255, 255, 255, 0.66);
+  --glass-border: rgba(11, 11, 20, 0.08);
+  --glass-highlight: rgba(255, 255, 255, 0.65);
+}
+
+.dark {
+  --background: #06060d;
+  --foreground: #f4f4fa;
+  --glass-bg: rgba(255, 255, 255, 0.045);
+  --glass-border: rgba(255, 255, 255, 0.09);
+  --glass-highlight: rgba(255, 255, 255, 0.22);
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-geist-sans), Arial, Helvetica, sans-serif;
+}
+
+html.locale-fa body,
+html.locale-fa {
+  font-family: "Vazirmatn", var(--font-geist-sans), Tahoma, Arial, sans-serif;
+}
+
+html.locale-en body {
+  font-family: var(--font-geist-sans), Arial, Helvetica, sans-serif;
+}
+
+/* ================= Aurora background layer ================= */
+.aurora-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(1000px 640px at 85% -12%, rgba(139, 92, 246, 0.09), transparent 62%),
+    radial-gradient(820px 520px at -12% 18%, rgba(34, 211, 238, 0.07), transparent 58%),
+    radial-gradient(760px 540px at 52% 112%, rgba(232, 121, 249, 0.06), transparent 60%);
+}
+.dark .aurora-layer {
+  background:
+    radial-gradient(1000px 640px at 85% -12%, rgba(139, 92, 246, 0.17), transparent 62%),
+    radial-gradient(820px 520px at -12% 18%, rgba(34, 211, 238, 0.11), transparent 58%),
+    radial-gradient(760px 540px at 52% 112%, rgba(232, 121, 249, 0.09), transparent 60%);
+}
+.dark .aurora-layer::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.028) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.028) 1px, transparent 1px);
+  background-size: 44px 44px;
+  -webkit-mask-image: radial-gradient(ellipse 90% 68% at 50% 0%, black 28%, transparent 74%);
+  mask-image: radial-gradient(ellipse 90% 68% at 50% 0%, black 28%, transparent 74%);
+}
+
+/* ================= Glassmorphism ================= */
+.glass-card {
+  position: relative;
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  border-radius: 1.25rem;
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+}
+.dark .glass-card {
+  box-shadow: 0 10px 34px rgba(0, 0, 0, 0.35);
+}
+.glass-card::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  inset-inline: 1.1rem;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--glass-highlight), transparent);
+  pointer-events: none;
+}
+
+/* ================= Neon helpers ================= */
+.text-gradient-brand {
+  background: linear-gradient(100deg, #a78bfa 10%, #22d3ee 90%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+.neon-primary {
+  background: linear-gradient(135deg, #8b5cf6 0%, #7c5cf6 45%, #22d3ee 130%);
+  color: #fff;
+  box-shadow: 0 4px 22px rgba(139, 92, 246, 0.35);
+  transition: box-shadow 0.2s ease, filter 0.2s ease;
+}
+.neon-primary:hover:not(:disabled) {
+  filter: brightness(1.08);
+  box-shadow: 0 4px 30px rgba(139, 92, 246, 0.5);
+}
+.neon-glow-violet {
+  box-shadow: 0 0 22px rgba(139, 92, 246, 0.35);
+}
+.nav-active {
+  background: linear-gradient(135deg, rgba(139, 92, 246, 0.2), rgba(34, 211, 238, 0.09));
+  border: 1px solid rgba(139, 92, 246, 0.32);
+  box-shadow: 0 0 16px rgba(139, 92, 246, 0.15);
+}
+
+/* ================= Motion ================= */
+@keyframes fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.animate-fade-up {
+  animation: fade-up 0.45s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/* Subtle scrollbars for the dark UI */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(139, 92, 246, 0.3);
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(139, 92, 246, 0.5);
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* Mobile Safari Zoom Prevention */
+@media screen and (max-width: 768px) {
+  input, select, textarea {
+    font-size: 16px !important;
+  }
+}
+
+/* Base safe area utilities */
+.safe-pb {
+  padding-bottom: env(safe-area-inset-bottom, 20px);
+}
+.safe-pt {
+  padding-top: env(safe-area-inset-top, 20px);
+}
+
+@layer utilities {
+  .hide-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+  .hide-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+}
