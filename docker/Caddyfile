@@ -1,0 +1,4 @@
+{$SRP_DOMAIN::80} {
+	encode zstd gzip
+	reverse_proxy web:3000
+}
