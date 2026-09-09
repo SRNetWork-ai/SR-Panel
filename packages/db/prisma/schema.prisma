@@ -1,0 +1,604 @@
+// SRPanel — data model v1 (core)
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum AdminRole {
+  OWNER
+  ADMIN
+}
+
+enum PanelType {
+  XUI
+}
+
+enum ServerStatus {
+  UNKNOWN
+  ONLINE
+  OFFLINE
+  AUTH_ERROR
+}
+
+enum ClientStatus {
+  ACTIVE
+  DISABLED
+  EXPIRED
+  LIMITED
+}
+
+enum SubTheme {
+  AURORA
+  MINIMAL
+}
+
+/// Admins (owner + resellers). Each admin has an isolated set of clients.
+model Admin {
+  id            String     @id @default(cuid())
+  username      String     @unique
+  passwordHash  String
+  role          AdminRole  @default(ADMIN)
+  displayName   String?
+  isActive      Boolean    @default(true)
+  /// Credit balance in the panel currency unit (e.g. Toman). Owner is unlimited.
+  credit        BigInt     @default(0)
+  /// Total traffic quota in bytes this admin may allocate to clients (null = unlimited)
+  trafficQuota  BigInt?
+  /// Max number of clients (null = unlimited)
+  clientLimit   Int?
+  /// Admin account expiry (null = never)
+  expiresAt     DateTime?
+  totpSecret    String?
+  totpEnabled   Boolean    @default(false)
+  telegramId    String?
+  lastLoginAt   DateTime?
+  lastLoginIp   String?
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+  createdById   String?
+  createdBy     Admin?     @relation("AdminCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  children      Admin[]    @relation("AdminCreator")
+
+  clients       Client[]
+  serverAccess  AdminServerAccess[]
+  sessions      Session[]
+  auditLogs     AuditLog[]
+  brand         Brand?
+  apiKeys       ApiKey[]
+  webhooks      Webhook[]
+  /// Per-admin wholesale price overrides (IRT). null = global pricing setting
+  pricePerGB    BigInt?
+  pricePerDay   BigInt?
+  store         StoreSettings?
+  plans         Plan[]
+  discounts     Discount[]
+  orders        Order[]
+  payments      Payment[]  @relation("PaymentAdmin")
+  reviewedPayments Payment[] @relation("PaymentReviewer")
+  walletTxs     WalletTx[]
+
+  @@index([role])
+}
+
+/// Login sessions (httpOnly cookie holds the session token hash)
+model Session {
+  id         String   @id @default(cuid())
+  adminId    String
+  admin      Admin    @relation(fields: [adminId], references: [id], onDelete: Cascade)
+  tokenHash  String   @unique
+  userAgent  String?
+  ip         String?
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+
+  @@index([adminId])
+}
+
+/// A remote panel server (3x-ui). Credentials are encrypted at rest with SRP_SECRET.
+model Server {
+  id             String        @id @default(cuid())
+  name           String
+  type           PanelType     @default(XUI)
+  /// e.g. https://1.2.3.4:2053/secretpath (no trailing slash)
+  baseUrl        String
+  username       String
+  passwordEnc    String
+  /// Public host used in generated configs (defaults to baseUrl host)
+  publicHost     String?
+  /// Optional subscription URL base of the 3x-ui panel itself
+  subBaseUrl     String?
+  /// Ordering weight for Smart Sub (higher = earlier)
+  weight         Int           @default(100)
+  isActive       Boolean       @default(true)
+  status         ServerStatus  @default(UNKNOWN)
+  lastSeenAt     DateTime?
+  lastError      String?
+  /// Cached system status from /panel/api/server/status (JSON)
+  statusJson     Json?
+  /// Cached inbound list (JSON) so the UI never waits for the remote panel
+  inboundsJson   Json?
+  inboundsSyncAt DateTime?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  clients        ClientServer[]
+  adminAccess    AdminServerAccess[]
+  metrics        ServerMetric[]
+  incidents      Incident[]
+
+  @@index([isActive])
+}
+
+/// Which servers an admin can provision on (owner has all)
+model AdminServerAccess {
+  adminId   String
+  admin     Admin   @relation(fields: [adminId], references: [id], onDelete: Cascade)
+  serverId  String
+  server    Server  @relation(fields: [serverId], references: [id], onDelete: Cascade)
+  /// Which inbound ids on this server the admin may use (empty = all)
+  inboundIds Int[]  @default([])
+
+  @@id([adminId, serverId])
+}
+
+/// Time-series metrics for monitoring (pruned by worker)
+model ServerMetric {
+  id         BigInt   @id @default(autoincrement())
+  serverId   String
+  server     Server   @relation(fields: [serverId], references: [id], onDelete: Cascade)
+  at         DateTime @default(now())
+  online     Boolean
+  latencyMs  Int?
+  cpu        Float?
+  memUsed    BigInt?
+  memTotal   BigInt?
+  netUp      BigInt?
+  netDown    BigInt?
+  xrayState  String?
+
+  @@index([serverId, at])
+}
+
+/// A customer/client. One client can exist on several servers (multi-server sub).
+model Client {
+  id            String        @id @default(cuid())
+  adminId       String
+  admin         Admin         @relation(fields: [adminId], references: [id], onDelete: Cascade)
+  /// Human-friendly name (remark)
+  name          String
+  /// Stable UUID shared across servers (also used as VLESS/VMess id)
+  uuid          String        @unique
+  /// Random token used in the subscription URL
+  subToken      String        @unique
+  /// Total traffic limit in bytes (0 = unlimited)
+  trafficLimit  BigInt        @default(0)
+  /// Aggregated usage across servers (bytes), refreshed by worker
+  usedUp        BigInt        @default(0)
+  usedDown      BigInt        @default(0)
+  /// Expiry (null = never)
+  expiresAt     DateTime?
+  /// Max concurrent IPs (0 = unlimited)
+  ipLimit       Int           @default(0)
+  status        ClientStatus  @default(ACTIVE)
+  note          String?
+  telegramId    String?
+  phone         String?
+  /// Sub theme override
+  subTheme      SubTheme?
+  lastOnlineAt  DateTime?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+  orders        Order[]
+
+  servers       ClientServer[]
+  usageSamples  ClientUsage[]
+
+  @@index([adminId, status])
+  @@index([expiresAt])
+}
+
+/// Provisioning of a client on a specific server/inbound
+model ClientServer {
+  id           String   @id @default(cuid())
+  clientId     String
+  client       Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  serverId     String
+  server       Server   @relation(fields: [serverId], references: [id], onDelete: Cascade)
+  inboundId    Int
+  /// 3x-ui client email (must be unique per panel) — we use `${name}-${shortId}`
+  remoteEmail  String
+  /// Per-server usage snapshot (bytes)
+  up           BigInt   @default(0)
+  down         BigInt   @default(0)
+  enabled      Boolean  @default(true)
+  lastSyncAt   DateTime?
+  lastError    String?
+  createdAt    DateTime @default(now())
+
+  @@unique([clientId, serverId, inboundId])
+  @@index([serverId, remoteEmail])
+}
+
+/// Hourly usage samples for per-client charts (pruned by worker)
+model ClientUsage {
+  id        BigInt   @id @default(autoincrement())
+  clientId  String
+  client    Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  at        DateTime @default(now())
+  up        BigInt
+  down      BigInt
+
+  @@index([clientId, at])
+}
+
+/// Per-admin branding (white-label). Owner brand = default.
+model Brand {
+  id           String   @id @default(cuid())
+  adminId      String   @unique
+  admin        Admin    @relation(fields: [adminId], references: [id], onDelete: Cascade)
+  name         String
+  tagline      String?
+  logoUrl      String?
+  primaryColor String   @default("#8b5cf6")
+  accentColor  String   @default("#22d3ee")
+  supportUrl   String?
+  telegramUrl  String?
+  /// Custom domain for sub links / storefront (verified by worker)
+  customDomain String?  @unique
+  domainVerified Boolean @default(false)
+  subTheme     SubTheme @default(AURORA)
+  updatedAt    DateTime @updatedAt
+}
+
+/// Everything important that happens, for the Audit Log screen
+model AuditLog {
+  id        BigInt   @id @default(autoincrement())
+  at        DateTime @default(now())
+  adminId   String?
+  admin     Admin?   @relation(fields: [adminId], references: [id], onDelete: SetNull)
+  action    String
+  target    String?
+  meta      Json?
+  ip        String?
+
+  @@index([at])
+  @@index([adminId, at])
+}
+
+/// Key/value settings (brand defaults, telegram bot token, etc.)
+model Setting {
+  key       String   @id
+  value     Json
+  updatedAt DateTime @updatedAt
+}
+
+// ---------------------------------------------------------------------------
+// Stage 2A — monitoring, notifications, backups, public API, webhooks
+// ---------------------------------------------------------------------------
+
+enum IncidentKind {
+  OFFLINE
+  AUTH_ERROR
+  XRAY_DOWN
+  HIGH_CPU
+}
+
+enum IncidentStatus {
+  OPEN
+  RESOLVED
+}
+
+/// Server incidents detected by the worker (opened/resolved automatically, or resolved manually)
+model Incident {
+  id         String         @id @default(cuid())
+  serverId   String
+  server     Server         @relation(fields: [serverId], references: [id], onDelete: Cascade)
+  kind       IncidentKind
+  status     IncidentStatus @default(OPEN)
+  message    String?
+  startedAt  DateTime       @default(now())
+  resolvedAt DateTime?
+  notifiedAt DateTime?
+
+  @@index([serverId, status])
+  @@index([startedAt])
+}
+
+enum BackupStatus {
+  RUNNING
+  OK
+  FAILED
+}
+
+/// Database backups (pg_dump | gzip), optionally shipped to Telegram
+model Backup {
+  id             String       @id @default(cuid())
+  at             DateTime     @default(now())
+  status         BackupStatus @default(RUNNING)
+  fileName       String
+  sizeBytes      BigInt?
+  sentToTelegram Boolean      @default(false)
+  trigger        String       @default("schedule")
+  error          String?
+  finishedAt     DateTime?
+
+  @@index([at])
+}
+
+/// Outbound notifications (Telegram) with a dedupe key so reminders are sent once
+model NotificationLog {
+  id        BigInt   @id @default(autoincrement())
+  at        DateTime @default(now())
+  channel   String   @default("telegram")
+  kind      String
+  targetId  String?
+  adminId   String?
+  dedupeKey String   @unique
+  ok        Boolean
+  error     String?
+
+  @@index([at])
+}
+
+/// Personal access tokens for the public REST API (/api/v1). Only the hash is stored.
+model ApiKey {
+  id         String    @id @default(cuid())
+  adminId    String
+  admin      Admin     @relation(fields: [adminId], references: [id], onDelete: Cascade)
+  name       String
+  prefix     String
+  keyHash    String    @unique
+  scopes     String[]  @default(["read"])
+  lastUsedAt DateTime?
+  expiresAt  DateTime?
+  revokedAt  DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@index([adminId])
+}
+
+/// Webhook endpoints. Owner hooks receive all events, admin hooks only their own.
+model Webhook {
+  id          String   @id @default(cuid())
+  adminId     String
+  admin       Admin    @relation(fields: [adminId], references: [id], onDelete: Cascade)
+  url         String
+  secret      String
+  /// empty = all events
+  events      String[] @default([])
+  isActive    Boolean  @default(true)
+  lastStatus  Int?
+  lastError   String?
+  lastFiredAt DateTime?
+  failCount   Int      @default(0)
+  createdAt   DateTime @default(now())
+
+  deliveries  WebhookDelivery[]
+
+  @@index([adminId])
+}
+
+/// Delivery queue with retries (processed by the worker)
+model WebhookDelivery {
+  id        BigInt    @id @default(autoincrement())
+  webhookId String
+  webhook   Webhook   @relation(fields: [webhookId], references: [id], onDelete: Cascade)
+  event     String
+  payload   Json
+  status    Int?
+  error     String?
+  attempts  Int       @default(0)
+  nextAt    DateTime  @default(now())
+  doneAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([doneAt, nextAt])
+}
+
+// ---------------------------------------------------------------------------
+// Stage 2B — store, wallet & payments
+// ---------------------------------------------------------------------------
+
+enum OrderStatus {
+  PENDING
+  PAID
+  FULFILLED
+  CANCELED
+  EXPIRED
+}
+
+enum PaymentKind {
+  ORDER
+  TOPUP
+}
+
+enum PaymentMethod {
+  USDT
+  CARD
+  ZARINPAL
+  WALLET
+  MANUAL
+}
+
+enum PaymentStatus {
+  PENDING
+  REVIEW
+  CONFIRMED
+  REJECTED
+  EXPIRED
+}
+
+enum WalletTxKind {
+  TOPUP
+  PURCHASE
+  REFUND
+  ADJUST
+}
+
+/// Per-admin storefront + payment receiving settings
+model StoreSettings {
+  id               String   @id @default(cuid())
+  adminId          String   @unique
+  admin            Admin    @relation(fields: [adminId], references: [id], onDelete: Cascade)
+  enabled          Boolean  @default(false)
+  /// Public URL slug: /shop/<slug>
+  slug             String   @unique
+  title            String?
+  description      String?
+  rules            String?
+  supportUrl       String?
+  currency         String   @default("IRT")
+  usdtEnabled      Boolean  @default(false)
+  usdtAddress      String?
+  usdtNetwork      String   @default("TRC20")
+  /// IRT per 1 USDT (manual rate)
+  usdtRate         Int      @default(0)
+  usdtAutoVerify   Boolean  @default(true)
+  cardEnabled      Boolean  @default(false)
+  cardNumber       String?
+  cardHolder       String?
+  cardBank         String?
+  zarinpalEnabled  Boolean  @default(false)
+  /// Encrypted merchant id
+  zarinpalMerchant String?
+  zarinpalSandbox  Boolean  @default(false)
+  requireTelegram  Boolean  @default(false)
+  requirePhone     Boolean  @default(false)
+  /// Minutes a pending payment stays open
+  paymentTtlMin    Int      @default(60)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+}
+
+model Plan {
+  id          String   @id @default(cuid())
+  adminId     String
+  admin       Admin    @relation(fields: [adminId], references: [id], onDelete: Cascade)
+  name        String
+  description String?
+  badge       String?
+  /// GB, 0 = unlimited
+  trafficGB   Int
+  /// days, 0 = never
+  days        Int
+  ipLimit     Int      @default(0)
+  /// Retail price (IRT)
+  price       BigInt
+  oldPrice    BigInt?
+  /// [{ serverId, inboundId }]
+  targets     Json
+  isActive    Boolean  @default(true)
+  sortOrder   Int      @default(0)
+  sold        Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  orders      Order[]
+
+  @@index([adminId, isActive])
+}
+
+model Discount {
+  id        String    @id @default(cuid())
+  adminId   String
+  admin     Admin     @relation(fields: [adminId], references: [id], onDelete: Cascade)
+  code      String
+  percent   Int       @default(0)
+  amount    BigInt    @default(0)
+  maxUses   Int?
+  uses      Int       @default(0)
+  expiresAt DateTime?
+  isActive  Boolean   @default(true)
+  createdAt DateTime  @default(now())
+
+  @@unique([adminId, code])
+}
+
+model Order {
+  id                 String      @id @default(cuid())
+  /// Public access token (/shop/o/<token>)
+  token              String      @unique
+  adminId            String
+  admin              Admin       @relation(fields: [adminId], references: [id], onDelete: Cascade)
+  planId             String?
+  plan               Plan?       @relation(fields: [planId], references: [id], onDelete: SetNull)
+  clientId           String?
+  client             Client?     @relation(fields: [clientId], references: [id], onDelete: SetNull)
+  /// When set, the order renews this client instead of creating a new one
+  renewClientId      String?
+  status             OrderStatus @default(PENDING)
+  listPrice          BigInt
+  discountCode       String?
+  discountAmount     BigInt      @default(0)
+  /// Final amount (IRT)
+  amount             BigInt
+  customerName       String?
+  customerTelegramId String?
+  customerPhone      String?
+  customerEmail      String?
+  note               String?
+  error              String?
+  ip                 String?
+  /// { name, trafficGB, days, ipLimit, targets }
+  planSnapshot       Json
+  createdAt          DateTime    @default(now())
+  paidAt             DateTime?
+  fulfilledAt        DateTime?
+  payments           Payment[]
+
+  @@index([adminId, status, createdAt])
+}
+
+model Payment {
+  id           String        @id @default(cuid())
+  kind         PaymentKind
+  method       PaymentMethod
+  status       PaymentStatus @default(PENDING)
+  orderId      String?
+  order        Order?        @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  /// ORDER: the seller admin. TOPUP: the admin whose wallet is credited.
+  adminId      String
+  admin        Admin         @relation("PaymentAdmin", fields: [adminId], references: [id], onDelete: Cascade)
+  /// IRT
+  amount       BigInt
+  /// USDT amount as decimal string
+  amountUsdt   String?
+  txid         String?       @unique
+  receiptRef   String?
+  receiptFile  String?
+  cardPan      String?
+  authority    String?       @unique
+  refId        String?
+  reviewedById String?
+  reviewedBy   Admin?        @relation("PaymentReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
+  reviewedAt   DateTime?
+  reviewNote   String?
+  error        String?
+  expiresAt    DateTime?
+  meta         Json?
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+
+  @@index([adminId, status, createdAt])
+  @@index([status, expiresAt])
+}
+
+model WalletTx {
+  id           String       @id @default(cuid())
+  adminId      String
+  admin        Admin        @relation(fields: [adminId], references: [id], onDelete: Cascade)
+  kind         WalletTxKind
+  /// Signed amount (IRT)
+  amount       BigInt
+  balanceAfter BigInt
+  refType      String?
+  refId        String?
+  note         String?
+  byAdminId    String?
+  createdAt    DateTime     @default(now())
+
+  @@index([adminId, createdAt])
+}
