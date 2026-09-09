@@ -1,0 +1,285 @@
+"use client"
+
+import Link from "next/link"
+import { useRouter } from "next/navigation"
+import { useEffect, useMemo, useState, type FormEvent } from "react"
+import { Copy, Pencil, Plus, QrCode, RotateCcw, Search, Trash2, UserPlus } from "lucide-react"
+import { ApiError, api, copyText } from "@/lib/client"
+import type { ClientDto, ServerDto } from "@/lib/dto"
+import { daysLeft, formatBytes, percent, relativeTime } from "@/lib/format"
+import { useLocale, useT } from "@/lib/i18n"
+import { QR } from "@/components/QR"
+import { Badge, Button, Card, Empty, Field, Input, Modal, PageHeader, Progress, Select, StatusBadge, Textarea, cx, useConfirm, useToast } from "@/components/ui"
+
+const STATUSES = ["", "ACTIVE", "EXPIRED", "LIMITED", "DISABLED"] as const
+
+type Form = { name: string; trafficGB: number; days: number; ipLimit: number; note: string; phone: string; telegramId: string; targets: Array<{ serverId: string; inboundId: number }> }
+const emptyForm: Form = { name: "", trafficGB: 50, days: 30, ipLimit: 0, note: "", phone: "", telegramId: "", targets: [] }
+
+export function ClientsClient({ initial, servers, openNew, isOwner }: { initial: { items: ClientDto[]; total: number }; servers: ServerDto[]; openNew: boolean; isOwner: boolean }) {
+	const t = useT()
+	const locale = useLocale()
+	const toast = useToast()
+	const confirm = useConfirm()
+	const router = useRouter()
+
+	const [items, setItems] = useState(initial.items)
+	const [total, setTotal] = useState(initial.total)
+	const [q, setQ] = useState("")
+	const [status, setStatus] = useState<string>("")
+	const [loading, setLoading] = useState(false)
+	const firstTargets = () => servers.flatMap((s) => s.inbounds.filter((i) => i.enable).slice(0, 1).map((i) => ({ serverId: s.id, inboundId: i.id }))).slice(0, 1)
+	const [modal, setModal] = useState<"new" | ClientDto | null>(openNew ? "new" : null)
+	const [form, setForm] = useState<Form>(() => (openNew ? { ...emptyForm, targets: firstTargets() } : emptyForm))
+	const [busy, setBusy] = useState(false)
+	const [qr, setQr] = useState<ClientDto | null>(null)
+
+	const set = <K extends keyof Form>(k: K, v: Form[K]) => setForm((f) => ({ ...f, [k]: v }))
+
+	// live search (debounced)
+	useEffect(() => {
+		const h = setTimeout(async () => {
+			setLoading(true)
+			try {
+				const r = await api<{ items: ClientDto[]; total: number }>(`/api/clients?q=${encodeURIComponent(q)}&status=${status}&take=100`)
+				setItems(r.items)
+				setTotal(r.total)
+			} catch {
+				/* ignore */
+			} finally {
+				setLoading(false)
+			}
+		}, q ? 300 : 0)
+		return () => clearTimeout(h)
+	}, [q, status])
+
+	const openCreate = () => {
+		setForm({ ...emptyForm, targets: firstTargets() })
+		setModal("new")
+	}
+	const openEdit = (c: ClientDto) => {
+		setForm({ name: c.name, trafficGB: Math.round((c.trafficLimit / 1024 ** 3) * 100) / 100, days: 0, ipLimit: c.ipLimit, note: c.note ?? "", phone: c.phone ?? "", telegramId: c.telegramId ?? "", targets: c.servers.map((s) => ({ serverId: s.serverId, inboundId: s.inboundId })) })
+		setModal(c)
+	}
+	const toggleTarget = (serverId: string, inboundId: number) =>
+		setForm((f) => {
+			const has = f.targets.some((x) => x.serverId === serverId && x.inboundId === inboundId)
+			return { ...f, targets: has ? f.targets.filter((x) => !(x.serverId === serverId && x.inboundId === inboundId)) : [...f.targets, { serverId, inboundId }] }
+		})
+
+	const submit = async (e: FormEvent) => {
+		e.preventDefault()
+		setBusy(true)
+		try {
+			if (modal === "new") {
+				const r = await api<{ client: ClientDto; errors: string[] }>("/api/clients", {
+					method: "POST",
+					json: { name: form.name.trim(), trafficGB: Number(form.trafficGB), days: Number(form.days), ipLimit: Number(form.ipLimit), note: form.note || null, phone: form.phone || null, telegramId: form.telegramId || null, targets: form.targets },
+				})
+				setItems((l) => [r.client, ...l])
+				setTotal((n) => n + 1)
+				if (r.errors.length) toast.err(`${t("cl_partial_error")} ${r.errors.join(" | ")}`)
+				else toast.ok(t("set_saved"))
+				setModal(null)
+				setQr(r.client)
+			} else if (modal) {
+				const r = await api<{ client: ClientDto; errors: string[] }>(`/api/clients/${modal.id}`, {
+					method: "PATCH",
+					json: { name: form.name.trim(), trafficGB: Number(form.trafficGB), addDays: Number(form.days) || undefined, ipLimit: Number(form.ipLimit), note: form.note || null, phone: form.phone || null, telegramId: form.telegramId || null },
+				})
+				setItems((l) => l.map((x) => (x.id === r.client.id ? r.client : x)))
+				if (r.errors.length) toast.err(`${t("cl_partial_error")} ${r.errors.join(" | ")}`)
+				else toast.ok(t("set_saved"))
+				setModal(null)
+			}
+			router.refresh()
+		} catch (err) {
+			toast.err(err instanceof ApiError ? err.message : t("error_generic"))
+		} finally {
+			setBusy(false)
+		}
+	}
+
+	const reset = async (c: ClientDto) => {
+		if (!confirm(`${t("cl_reset")}: ${c.name}?`)) return
+		try {
+			const r = await api<{ client: ClientDto; errors: string[] }>(`/api/clients/${c.id}/reset`, { method: "POST" })
+			setItems((l) => l.map((x) => (x.id === c.id ? r.client : x)))
+			r.errors.length ? toast.err(r.errors.join(" | ")) : toast.ok(t("set_saved"))
+		} catch (err) {
+			toast.err(err instanceof ApiError ? err.message : t("error_generic"))
+		}
+	}
+	const toggle = async (c: ClientDto) => {
+		try {
+			const r = await api<{ client: ClientDto; errors: string[] }>(`/api/clients/${c.id}`, { method: "PATCH", json: { enabled: c.status === "DISABLED" } })
+			setItems((l) => l.map((x) => (x.id === c.id ? r.client : x)))
+		} catch (err) {
+			toast.err(err instanceof ApiError ? err.message : t("error_generic"))
+		}
+	}
+	const remove = async (c: ClientDto) => {
+		if (!confirm(`${t("delete")} «${c.name}» — ${t("confirm_delete")}`)) return
+		try {
+			await api(`/api/clients/${c.id}`, { method: "DELETE" })
+			setItems((l) => l.filter((x) => x.id !== c.id))
+			setTotal((n) => n - 1)
+		} catch (err) {
+			toast.err(err instanceof ApiError ? err.message : t("error_generic"))
+		}
+	}
+	const copySub = async (c: ClientDto) => {
+		(await copyText(c.subUrl)) ? toast.ok(t("copied")) : toast.err(t("error_generic"))
+	}
+
+	const serverMap = useMemo(() => new Map(servers.map((s) => [s.id, s])), [servers])
+
+	return (
+		<div>
+			<PageHeader title={`${t("cl_title")} (${total})`} subtitle={t("cl_sub")} actions={<Button variant="primary" onClick={openCreate}><UserPlus className="h-4 w-4" />{t("cl_add")}</Button>} />
+
+			<div className="mb-4 flex flex-wrap items-center gap-2">
+				<div className="relative min-w-56 flex-1">
+					<Search className="pointer-events-none absolute inset-y-0 start-3 my-auto h-4 w-4 text-muted" />
+					<Input className="ps-10" placeholder={t("search")} value={q} onChange={(e) => setQ(e.target.value)} />
+				</div>
+				<Select className="w-auto" value={status} onChange={(e) => setStatus(e.target.value)}>
+					{STATUSES.map((s) => (
+						<option key={s} value={s}>{s ? t(`st_${s}` as any) : t("all")}</option>
+					))}
+				</Select>
+			</div>
+
+			<Card bodyClassName="px-0 pb-0" className={cx(loading && "opacity-70")}>
+				{items.length === 0 ? (
+					<Empty text={t("cl_empty")} action={<Button variant="primary" size="sm" onClick={openCreate}><Plus className="h-4 w-4" />{t("cl_add")}</Button>} />
+				) : (
+					<div className="table-wrap">
+						<table className="table">
+							<thead>
+								<tr>
+									<th>{t("name")}</th>
+									<th>{t("status")}</th>
+									<th className="min-w-44">{t("cl_usage")}</th>
+									<th>{t("cl_expiry")}</th>
+									<th>{t("cl_servers")}</th>
+									<th>{t("cl_online")}</th>
+									<th className="text-end">{t("actions")}</th>
+								</tr>
+							</thead>
+							<tbody>
+								{items.map((c) => {
+									const used = c.usedUp + c.usedDown
+									const pct = c.trafficLimit > 0 ? percent(used, c.trafficLimit) : 0
+									const dl = daysLeft(c.expiresAt)
+									return (
+										<tr key={c.id}>
+											<td>
+												<Link href={`/clients/${c.id}`} className="font-medium hover:text-violet-soft">{c.name}</Link>
+												{c.note && <div className="max-w-48 truncate text-[11px] text-muted">{c.note}</div>}
+											</td>
+											<td><StatusBadge status={c.status} /></td>
+											<td>
+												<div className="mb-1 flex justify-between text-[11px] text-muted"><span className="num">{formatBytes(used)}</span><span className="num">{c.trafficLimit > 0 ? formatBytes(c.trafficLimit) : "∞"}</span></div>
+												<Progress value={pct} />
+											</td>
+											<td className="text-xs">
+												{c.expiresAt ? <span className={cx("num", dl !== null && dl <= 3 && "text-warning", dl !== null && dl <= 0 && "text-danger")}>{dl !== null && dl > 0 ? `${dl} ${t("days")}` : t("st_EXPIRED")}</span> : <span className="text-muted">{t("never")}</span>}
+											</td>
+											<td>
+												<div className="flex flex-wrap gap-1">
+													{c.servers.map((s) => <Badge key={s.id} tone={s.lastError ? "danger" : s.serverStatus === "ONLINE" ? "cyan" : "muted"}>{s.serverName}</Badge>)}
+												</div>
+											</td>
+											<td className="text-xs text-muted">{relativeTime(c.lastOnlineAt, locale)}</td>
+											<td>
+												<div className="flex justify-end gap-1">
+													<Button size="icon" variant="ghost" title={t("copy")} onClick={() => copySub(c)}><Copy className="h-4 w-4" /></Button>
+													<Button size="icon" variant="ghost" title={t("cl_qr")} onClick={() => setQr(c)}><QrCode className="h-4 w-4" /></Button>
+													<Button size="icon" variant="ghost" title={t("edit")} onClick={() => openEdit(c)}><Pencil className="h-4 w-4" /></Button>
+													<Button size="icon" variant="ghost" title={t("cl_reset")} onClick={() => reset(c)}><RotateCcw className="h-4 w-4" /></Button>
+													<Button size="sm" variant="ghost" onClick={() => toggle(c)}>{c.status === "DISABLED" ? t("cl_enable") : t("cl_disable")}</Button>
+													<Button size="icon" variant="danger" title={t("delete")} onClick={() => remove(c)}><Trash2 className="h-4 w-4" /></Button>
+												</div>
+											</td>
+										</tr>
+									)
+								})}
+							</tbody>
+						</table>
+					</div>
+				)}
+			</Card>
+
+			{/* create / edit */}
+			<Modal open={modal !== null} onClose={() => setModal(null)} title={modal === "new" ? t("cl_add") : t("cl_edit")} wide footer={<Button variant="primary" type="submit" form="client-form" loading={busy} disabled={modal === "new" && form.targets.length === 0}>{modal === "new" ? t("create") : t("save")}</Button>}>
+				<form id="client-form" onSubmit={submit} className="grid gap-4 md:grid-cols-2">
+					<div className="space-y-3">
+						<Field label={t("name")}><Input value={form.name} onChange={(e) => set("name", e.target.value)} required placeholder={t("cl_name_ph")} /></Field>
+						<div className="grid grid-cols-2 gap-3">
+							<Field label={t("cl_traffic_gb")}><Input type="number" min={0} step="0.5" value={form.trafficGB} onChange={(e) => set("trafficGB", Number(e.target.value))} /></Field>
+							<Field label={modal === "new" ? t("cl_days") : t("cl_extend_days")}><Input type="number" min={modal === "new" ? 0 : -3650} value={form.days} onChange={(e) => set("days", Number(e.target.value))} /></Field>
+						</div>
+						<div className="flex flex-wrap gap-1.5">
+							{[10, 30, 50, 100, 200].map((g) => <button key={g} type="button" className={cx("badge cursor-pointer", form.trafficGB === g ? "badge-violet" : "badge-muted")} onClick={() => set("trafficGB", g)}>{g} GB</button>)}
+							<button type="button" className={cx("badge cursor-pointer", form.trafficGB === 0 ? "badge-violet" : "badge-muted")} onClick={() => set("trafficGB", 0)}>∞</button>
+							<span className="mx-1 opacity-30">|</span>
+							{[30, 60, 90, 180].map((d) => <button key={d} type="button" className={cx("badge cursor-pointer", form.days === d ? "badge-cyan" : "badge-muted")} onClick={() => set("days", d)}>{d} {t("day_short")}</button>)}
+						</div>
+						<div className="grid grid-cols-2 gap-3">
+							<Field label={t("cl_ip_limit")}><Input type="number" min={0} value={form.ipLimit} onChange={(e) => set("ipLimit", Number(e.target.value))} /></Field>
+							<Field label={t("cl_phone")}><Input className="mono text-start" value={form.phone} onChange={(e) => set("phone", e.target.value)} placeholder="0912…" /></Field>
+						</div>
+						<Field label={t("cl_telegram")}><Input className="mono text-start" value={form.telegramId} onChange={(e) => set("telegramId", e.target.value)} placeholder="@username" /></Field>
+						<Field label={t("cl_note")}><Textarea value={form.note} onChange={(e) => set("note", e.target.value)} /></Field>
+					</div>
+
+					<div>
+						<div className="label">{t("cl_targets")}</div>
+						<p className="mb-2 text-[11px] text-muted">{t("cl_targets_hint")}</p>
+						{modal !== "new" && <p className="mb-2 text-[11px] text-warning">{t("cl_servers")}: {form.targets.map((x) => serverMap.get(x.serverId)?.name ?? x.serverId).join(", ") || "—"}</p>}
+						<div className="scrollbar-thin max-h-80 space-y-2 overflow-y-auto pe-1">
+							{servers.length === 0 && <p className="text-xs text-muted">{t("srv_empty")}</p>}
+							{servers.map((s) => (
+								<div key={s.id} className="glass glass-2 p-3">
+									<div className="mb-2 flex items-center justify-between">
+										<span className="text-sm font-medium">{s.name}</span>
+										<StatusBadge status={s.status} />
+									</div>
+									<div className="flex flex-wrap gap-1.5">
+										{s.inbounds.length === 0 && <span className="text-[11px] text-muted">—</span>}
+										{s.inbounds.map((i) => {
+											const on = form.targets.some((x) => x.serverId === s.id && x.inboundId === i.id)
+											return (
+												<button key={i.id} type="button" disabled={modal !== "new" || !i.enable} onClick={() => toggleTarget(s.id, i.id)} className={cx("badge cursor-pointer disabled:cursor-default disabled:opacity-60", on ? "badge-violet" : "badge-muted")}>
+													{i.protocol}:{i.port}{i.remark ? ` • ${i.remark}` : ""}{i.security !== "none" ? ` • ${i.security}` : ""}
+												</button>
+											)
+										})}
+									</div>
+								</div>
+							))}
+						</div>
+					</div>
+				</form>
+			</Modal>
+
+			{/* QR / sub link */}
+			<Modal open={qr !== null} onClose={() => setQr(null)} title={qr ? `${t("cl_sub_link")} — ${qr.name}` : ""}>
+				{qr && (
+					<div className="flex flex-col items-center gap-4">
+						<QR value={qr.subUrl} size={220} />
+						<div className="flex w-full items-center gap-2">
+							<Input readOnly className="mono text-xs" value={qr.subUrl} onFocus={(e) => e.currentTarget.select()} />
+							<Button variant="primary" onClick={() => copySub(qr)}><Copy className="h-4 w-4" /></Button>
+						</div>
+						<div className="flex gap-2">
+							<a className="btn btn-sm" href={qr.subUrl.replace("/sub/", "/s/")} target="_blank" rel="noreferrer">{t("cl_sub_page")}</a>
+							<Link className="btn btn-sm" href={`/clients/${qr.id}`}>{t("cl_links")}</Link>
+						</div>
+					</div>
+				)}
+			</Modal>
+		</div>
+	)
+}
