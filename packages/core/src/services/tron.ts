@@ -52,7 +52,7 @@ export async function verifyTrc20Payment(txid: string, toAddress: string, minAmo
 	const want = toAddress.trim()
 	// 1) Tronscan (rich, includes token transfer info)
 	try {
-		const res = await fetch(`{{https://apilist.tronscanapi.com/api/transaction-info?hash=${id}}}`, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(15_000) })
+		const res = await fetch(`https://apilist.tronscanapi.com/api/transaction-info?hash=${id}`, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(15_000) })
 		if (res.ok) {
 			const j = (await res.json()) as Record<string, unknown>
 			if (j && Object.keys(j).length) {
@@ -74,7 +74,7 @@ export async function verifyTrc20Payment(txid: string, toAddress: string, minAmo
 	try {
 		const headers: Record<string, string> = { accept: "application/json" }
 		if (process.env.SRP_TRONGRID_KEY) headers["TRON-PRO-API-KEY"] = process.env.SRP_TRONGRID_KEY
-		const res = await fetch(`{{https://api.trongrid.io/v1/transactions/${id}}}/events`, { headers, signal: AbortSignal.timeout(15_000) })
+		const res = await fetch(`https://api.trongrid.io/v1/transactions/${id}/events`, { headers, signal: AbortSignal.timeout(15_000) })
 		if (!res.ok) return { ok: false, status: "error", error: `TronGrid HTTP ${res.status}` }
 		const j = (await res.json()) as { data?: Array<Record<string, unknown>> }
 		const events = j.data ?? []
