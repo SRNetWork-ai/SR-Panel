@@ -1,0 +1,25 @@
+# keep the build context small and never bake secrets into the image
+.git
+.gitignore
+.github
+node_modules
+**/node_modules
+.next
+**/.next
+dist
+**/dist
+.env
+.env.*
+!.env.example
+backups
+uploads
+backend
+frontend
+scripts
+docs
+README.md
+LICENSE
+install.sh
+*.zip
+*.log
+*.md

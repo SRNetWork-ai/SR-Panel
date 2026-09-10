@@ -483,12 +483,13 @@ function NotificationsTab() {
 export function IntegrationsClient({ me, telegram }: { me: AdminDto; telegram: TelegramForm | null }) {
 	const t = useT()
 	const isOwner = me.role === "OWNER"
-	const tabs: Array<{ id: Tab; label: string; icon: typeof Bot; owner?: boolean }> = [
+	const allTabs: Array<{ id: Tab; label: string; icon: typeof Bot; owner?: boolean }> = [
 		{ id: "telegram", label: t("int_tab_telegram"), icon: Bot, owner: true },
 		{ id: "apikeys", label: t("int_tab_apikeys"), icon: KeyRound },
 		{ id: "webhooks", label: t("int_tab_webhooks"), icon: WebhookIcon },
 		{ id: "notifications", label: t("int_tab_notifications"), icon: Bell, owner: true },
-	].filter((x) => isOwner || !x.owner)
+	]
+	const tabs = allTabs.filter((x) => isOwner || !x.owner)
 	const [tab, setTab] = useState<Tab>(tabs[0]?.id ?? "apikeys")
 
 	return (

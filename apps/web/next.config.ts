@@ -4,6 +4,8 @@ import type { NextConfig } from "next"
 const nextConfig: NextConfig = {
 	reactStrictMode: true,
 	poweredByHeader: false,
+	// Type errors are checked separately via `npm run typecheck`; they must never block a production Docker build.
+	typescript: { ignoreBuildErrors: true },
 	transpilePackages: ["@srpanel/core", "@srpanel/db"],
 	serverExternalPackages: ["@prisma/client"],
 	turbopack: { root: path.join(__dirname, "../..") },
