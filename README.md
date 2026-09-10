@@ -76,20 +76,45 @@ docker compose up -d --build         # entrypoint خودکار prisma db push ر
 
 ## 🚀 نصب سریع (Docker)
 
-پیش‌نیاز: یک سرور Ubuntu 22.04+ با دامنه‌ای که به IP سرور اشاره می‌کند.
+پیش‌نیاز: یک سرور Ubuntu 22.04+ (یا Debian 12) با دسترسی root. دامنه اختیاری است؛ بدون دامنه پنل روی `http://IP` بالا می‌آید.
 
 ```bash
-git clone https://github.com/SRNetWork-ai/SR-Panel.git srpanel
-cd srpanel
-bash install.sh
+bash <(curl -Ls https://raw.githubusercontent.com/SRNetWork-ai/SR-Panel/main/install.sh)
 ```
 
-اسکریپت `install.sh`:
-1. Docker و Docker Compose را (اگر نباشد) نصب می‌کند
-2. دامنه، نام کاربری و رمز مالک را می‌پرسد و فایل `.env` را با کلیدهای امن تصادفی می‌سازد
-3. سرویس‌های `db` (PostgreSQL)، `web`، `worker` و `caddy` (HTTPS خودکار) را بالا می‌آورد
+نصب‌کننده:
+1. Docker و Docker Compose را (اگر نباشد) نصب می‌کند و در سرورهای کم‌رم Swap می‌سازد
+2. سورس را در `/opt/srpanel` دانلود می‌کند (فونت‌ها را هم خودکار می‌گیرد)
+3. **دامنه (اختیاری)، نام کاربری و رمز مالک**، نام برند و منطقه زمانی را می‌پرسد و `.env` را با کلیدهای امن تصادفی می‌سازد (رمز خالی = تولید خودکار رمز قوی)
+4. سرویس‌های `db` (PostgreSQL)، `web`، `worker` و `caddy` (HTTPS خودکار) را می‌سازد و بالا می‌آورد
+5. دستور مدیریتی `SR` را نصب می‌کند و در پایان **آدرس پنل + نام کاربری + رمز** را نمایش می‌دهد
 
-بعد از چند دقیقه: `https://YOUR-DOMAIN` → ورود با نام کاربری/رمز مالک.
+سوییچ‌های غیرتعاملی: `--domain=panel.example.com --user=admin --pass='StrongPass123' -y` و برای نصب تمیز روی سرور قبلی: `--wipe`.
+
+### 🛠 دستور `SR` (منوی مدیریت)
+
+بعد از نصب فقط بنویسید `SR` (یا `sr` / `srpanel`) تا منوی مدیریت باز شود. زیرفرمان‌ها:
+
+| دستور | کار |
+|---|---|
+| `SR status` | وضعیت کانتینرها + Health |
+| `SR creds` | نمایش آدرس پنل و نام کاربری/رمز مالک |
+| `SR passwd [user] [pass]` | ریست رمز یک ادمین (اگر ادمینی نباشد، مالک را می‌سازد) |
+| `SR admins` / `SR 2fa-off <user>` / `SR unlock <user>` | مدیریت حساب‌های ادمین |
+| `SR logs [web\|worker\|db\|caddy]` | لاگ سرویس‌ها |
+| `SR update` | دریافت آخرین سورس، بیلد و ری‌استارت |
+| `SR rebuild` / `SR start` / `SR stop` / `SR restart` | کنترل سرویس‌ها |
+| `SR domain [host]` / `SR port [n]` | تغییر دامنه (HTTPS خودکار) یا پورت HTTP |
+| `SR backup` / `SR restore <file>` | بکاپ فوری دیتابیس / بازگردانی |
+| `SR bbr` / `SR cleanup` / `SR shell` / `SR uninstall` | ابزارهای سرور |
+
+بعد از چند دقیقه: آدرسی که در پایان نصب چاپ شده (`https://YOUR-DOMAIN` یا `http://IP`) → ورود با نام کاربری/رمز مالک. اگر رمز را گم کردید: `SR creds` یا `SR passwd`.
+
+نصب از کلون محلی هم ممکن است (اسکریپت خودش می‌فهمد داخل سورس اجرا شده):
+
+```bash
+git clone https://github.com/SRNetWork-ai/SR-Panel.git srpanel && cd srpanel && bash install.sh
+```
 
 ### نصب دستی
 
@@ -122,6 +147,7 @@ srpanel/
 │  ├─ core/       منطق دامنه: آداپتر 3x-ui، سرویس‌ها، لینک‌ساز (vless/vmess/trojan/ss)، امنیت
 │  └─ db/         Prisma schema + client (PostgreSQL)
 ├─ docker/        Caddyfile, entrypoint
+├─ scripts/sr.sh   دستور مدیریتی SR
 ├─ docker-compose.yml, Dockerfile, install.sh
 ```
 
@@ -159,7 +185,7 @@ srpanel/
 4. برای هر ادمین، در صفحه **ادمین‌ها** فیلد «آی‌دی تلگرام» را پر کنید تا به بات دسترسی داشته باشد و اعلان کلاینت‌های خودش را بگیرد.
 5. پنل → **بکاپ‌ها** → ساعت اجرا و تعداد نگه‌داری را تنظیم کنید. فایل‌ها در ولوم `srp_backups` ذخیره و (در صورت فعال بودن) به تلگرام ارسال می‌شوند.
 
-بازگردانی بکاپ:
+بازگردانی بکاپ (ساده‌ترین راه: `SR backup` / `SR restore <file>`) یا دستی:
 
 ```bash
 docker compose stop web worker
