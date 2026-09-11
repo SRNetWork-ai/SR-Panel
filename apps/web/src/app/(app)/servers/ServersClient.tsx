@@ -219,7 +219,7 @@ export function ServersClient({ initial }: { initial: ServerDto[] }) {
 	}
 
 	const remove = async (s: ServerDto) => {
-		if (!confirm(t("srv_delete_warn") + "\\n\\n" + t("confirm_delete"))) return
+		if (!confirm(t("srv_delete_warn") + "\n\n" + t("confirm_delete"))) return
 		try {
 			await api(`/api/servers/${s.id}`, { method: "DELETE" })
 			setServers((l) => l.filter((x) => x.id !== s.id))
