@@ -1,4 +1,5 @@
 import type { PanelInbound } from "../panels/types"
+import { normalizeHostValue, resolveInboundAddress, type InboundAddressContext } from "./host"
 
 export type StoredInbound = Omit<PanelInbound, "clientStats"> & { clientStats?: PanelInbound["clientStats"] }
 
@@ -10,10 +11,17 @@ export interface LinkClient {
 }
 
 export interface LinkOptions {
-	/** Public host of the server (IP or domain) */
+	/**
+	 * Last-resort host of the server (IP or domain).
+	 * The address of the inbound itself always wins - see `subscription/host.ts`.
+	 */
 	host: string
 	/** Display name in the client app */
 	remark: string
+	/** Server context (publicHost / panel URL / panel IP) used to resolve the inbound address */
+	server?: InboundAddressContext
+	/** Pre-resolved address; skips resolution entirely */
+	address?: string
 }
 
 interface Endpoint {
@@ -93,20 +101,31 @@ function streamQuery(ss: Record<string, any>) {
 	return { network, security, q }
 }
 
-function endpoints(inbound: StoredInbound, security: string, opts: LinkOptions): Endpoint[] {
+/**
+ * Address written into the config. The inbound wins over the server, and the panel URL
+ * is only used when nothing else is known (see `subscription/host.ts`).
+ */
+export function linkAddressOf(inbound: StoredInbound, opts: LinkOptions): string {
+	const explicit = normalizeHostValue(opts.address)
+	if (explicit) return explicit
+	const resolved = resolveInboundAddress(inbound, opts.server ?? {})
+	return resolved.host || normalizeHostValue(opts.host) || opts.host
+}
+
+function endpoints(inbound: StoredInbound, security: string, opts: LinkOptions, address: string): Endpoint[] {
 	const ext = inbound.streamSettings?.externalProxy
 	if (Array.isArray(ext) && ext.length) {
 		return ext.map((p: any) => {
 			const force = String(p.forceTls || "same")
 			return {
-				host: String(p.dest),
+				host: normalizeHostValue(p.dest) || address,
 				port: Number(p.port) || inbound.port,
 				security: force === "same" ? security : force,
 				remark: p.remark ? `${opts.remark} ${p.remark}` : opts.remark,
 			}
 		})
 	}
-	return [{ host: opts.host, port: inbound.port, security, remark: opts.remark }]
+	return [{ host: address, port: inbound.port, security, remark: opts.remark }]
 }
 
 function b64(s: string) {
@@ -129,7 +148,8 @@ export function resolveFlow(inbound: StoredInbound, uuid: string, override?: str
 /** Build share links (vless:// vmess:// trojan:// ss://) for one client on one inbound. */
 export function buildLinks(inbound: StoredInbound, client: LinkClient, opts: LinkOptions): string[] {
 	const { network, security, q } = streamQuery(inbound.streamSettings ?? {})
-	const eps = endpoints(inbound, security, opts)
+	const address = linkAddressOf(inbound, opts)
+	const eps = endpoints(inbound, security, opts, address)
 	const links: string[] = []
 	for (const ep of eps) {
 		const params = new URLSearchParams({ ...q, security: ep.security })

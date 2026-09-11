@@ -3,7 +3,7 @@
 import Link from "next/link"
 import { usePathname, useRouter } from "next/navigation"
 import { useEffect, useState, type ReactNode } from "react"
-import { Activity, ArrowDownToLine, DatabaseBackup, Globe2, LayoutDashboard, LogOut, Menu, Moon, Plug, ScrollText, Server, Settings, ShieldCheck, ShoppingCart, Store, Sun, Users, Wallet, X } from "lucide-react"
+import { Activity, ArrowDownToLine, DatabaseBackup, Globe2, LayoutDashboard, LogOut, Menu, MoreHorizontal, Moon, Plug, ScrollText, Server, Settings, ShieldCheck, ShoppingCart, Store, Sun, Users, Wallet, X } from "lucide-react"
 import { api } from "@/lib/client"
 import { useLocale, useT } from "@/lib/i18n"
 import type { DictKey } from "@/lib/dict"
@@ -16,7 +16,7 @@ export interface ShellUser {
 	role: "OWNER" | "ADMIN"
 }
 
-type NavItem = { href: string; key?: DictKey; label?: [string, string]; icon: typeof LayoutDashboard; owner?: boolean }
+type NavItem = { href: string; key?: DictKey; label?: [string, string]; short?: [string, string]; icon: typeof LayoutDashboard; owner?: boolean }
 type NavGroup = { id: string; label: [string, string]; items: NavItem[] }
 
 const GROUPS: NavGroup[] = [
@@ -24,7 +24,7 @@ const GROUPS: NavGroup[] = [
 		id: "main",
 		label: ["اصلی", "Main"],
 		items: [
-			{ href: "/dashboard", key: "nav_dashboard", icon: LayoutDashboard },
+			{ href: "/dashboard", key: "nav_dashboard", short: ["خانه", "Home"], icon: LayoutDashboard },
 			{ href: "/clients", key: "nav_clients", icon: Users },
 		],
 	},
@@ -53,7 +53,7 @@ const GROUPS: NavGroup[] = [
 			{ href: "/backups", key: "nav_backups", icon: DatabaseBackup, owner: true },
 			{ href: "/integrations", key: "nav_integrations", icon: Plug },
 			{ href: "/audit", key: "nav_audit", icon: ScrollText, owner: true },
-			{ href: "/updates", label: ["به\u200cروزرسانی", "Updates"], icon: ArrowDownToLine, owner: true },
+			{ href: "/updates", label: ["به\u200cروزرسانی", "Updates"], short: ["آپدیت", "Update"], icon: ArrowDownToLine, owner: true },
 			{ href: "/settings", key: "nav_settings", icon: Settings },
 		],
 	},
@@ -82,11 +82,31 @@ export function AppShell({ user, brandName, theme, children }: { user: ShellUser
 	}, [])
 	useEffect(() => setOpen(false), [pathname])
 
+	// freeze the page behind the drawer and close it with Esc
+	useEffect(() => {
+		if (!open) return
+		const previous = document.body.style.overflow
+		document.body.style.overflow = "hidden"
+		const onKey = (e: KeyboardEvent) => {
+			if (e.key === "Escape") setOpen(false)
+		}
+		window.addEventListener("keydown", onKey)
+		return () => {
+			document.body.style.overflow = previous
+			window.removeEventListener("keydown", onKey)
+		}
+	}, [open])
+
 	const isOwner = user.role === "OWNER"
 	const groups = GROUPS.map((g) => ({ ...g, items: g.items.filter((n) => !n.owner || isOwner) })).filter((g) => g.items.length > 0)
 	const flat = groups.flatMap((g) => g.items)
 	const navLabel = (n: NavItem) => (n.label ? n.label[locale === "fa" ? 0 : 1] : t(n.key as DictKey))
+	const tabLabel = (n: NavItem) => (n.short ? n.short[locale === "fa" ? 0 : 1] : navLabel(n))
 	const groupLabel = (g: NavGroup) => g.label[locale === "fa" ? 0 : 1]
+	const isActive = (href: string) => pathname === href || pathname.startsWith(href + "/")
+	const tabs = flat.slice(0, 4)
+	const current = flat.find((n) => isActive(n.href))
+	const pageTitle = current ? navLabel(current) : brandName
 
 	const toggleRail = () => {
 		const next = !rail
@@ -113,12 +133,18 @@ export function AppShell({ user, brandName, theme, children }: { user: ShellUser
 	}
 
 	const navList = (compact: boolean) => (
-		<nav className={cx("scrollbar-thin flex flex-1 flex-col gap-0.5 overflow-y-auto pe-1", compact && "nav-rail")}>
+		<nav className={cx("scrollbar-thin flex flex-1 flex-col gap-0.5 overflow-y-auto pe-1", compact && "nav-rail")} aria-label={L("منوی اصلی", "Main navigation")}>
 			{groups.map((g) => (
 				<div key={g.id} className="flex flex-col gap-0.5">
-					{compact ? <div className="mx-auto my-2 h-px w-6 bg-line" /> : <div className="nav-group"><span className="nav-group-label">{groupLabel(g)}</span></div>}
+					{compact ? (
+						<div className="mx-auto my-2 h-px w-6 bg-line" />
+					) : (
+						<div className="nav-group">
+							<span className="nav-group-label">{groupLabel(g)}</span>
+						</div>
+					)}
 					{g.items.map((n) => {
-						const active = pathname === n.href || pathname.startsWith(n.href + "/")
+						const active = isActive(n.href)
 						const Icon = n.icon
 						return (
 							<Link key={n.href} href={n.href} title={navLabel(n)} aria-current={active ? "page" : undefined} className={cx("nav-item", active && "active")} onClick={() => setOpen(false)}>
@@ -144,22 +170,22 @@ export function AppShell({ user, brandName, theme, children }: { user: ShellUser
 							<div className="truncate text-sm font-medium">{user.displayName || user.username}</div>
 							<div className="text-[11px] text-muted">{isOwner ? L("مالک", "Owner") : L("ادمین", "Admin")}</div>
 						</div>
-						<Button size="icon" variant="ghost" onClick={logout} title={L("خروج", "Sign out")}>
+						<Button size="icon" variant="ghost" onClick={logout} title={L("خروج", "Sign out")} aria-label={L("خروج", "Sign out")}>
 							<LogOut className="h-4 w-4" />
 						</Button>
 					</>
 				)}
 			</div>
 			<div className={cx("flex items-center gap-2", compact && "flex-col")}>
-				<Button size="sm" className={compact ? "w-full" : "flex-1"} onClick={toggleTheme} title={L("تغییر تم", "Toggle theme")}>
+				<Button size="sm" className={compact ? "w-full" : "flex-1"} onClick={toggleTheme} title={L("تغییر تم", "Toggle theme")} aria-label={L("تغییر تم", "Toggle theme")}>
 					{mode === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
 				</Button>
-				<Button size="sm" className={compact ? "w-full" : "flex-1"} onClick={toggleLocale} title={L("تغییر زبان", "Change language")}>
+				<Button size="sm" className={compact ? "w-full" : "flex-1"} onClick={toggleLocale} title={L("تغییر زبان", "Change language")} aria-label={L("تغییر زبان", "Change language")}>
 					<Globe2 className="h-4 w-4" />
 					{!compact && <span className="text-xs">{locale === "fa" ? "EN" : "فا"}</span>}
 				</Button>
 				{compact && (
-					<Button size="sm" className="w-full" onClick={logout} title={L("خروج", "Sign out")}>
+					<Button size="sm" className="w-full" onClick={logout} title={L("خروج", "Sign out")} aria-label={L("خروج", "Sign out")}>
 						<LogOut className="h-4 w-4" />
 					</Button>
 				)}
@@ -170,6 +196,7 @@ export function AppShell({ user, brandName, theme, children }: { user: ShellUser
 	return (
 		<div className="min-h-dvh">
 			<div className="aurora" />
+
 			{/* desktop sidebar (collapsible) */}
 			<aside className={cx("fixed inset-y-0 start-0 z-30 hidden flex-col p-3 transition-all duration-300 lg:flex", rail ? "w-[92px]" : "w-64")}>
 				<div className="glass sheen flex h-full flex-col gap-2 p-3">
@@ -186,11 +213,12 @@ export function AppShell({ user, brandName, theme, children }: { user: ShellUser
 
 			{/* mobile drawer */}
 			{open && (
-				<div className="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm lg:hidden" onClick={() => setOpen(false)}>
-					<div className="glass glass-2 fade-up absolute inset-y-0 start-0 flex w-72 flex-col gap-2 rounded-none p-4" onClick={(e) => e.stopPropagation()}>
+				<div className="fixed inset-0 z-50 lg:hidden" role="dialog" aria-modal="true" aria-label={L("منو", "Menu")}>
+					<button type="button" className="srp-scrim absolute inset-0 h-full w-full" aria-label={L("بستن منو", "Close menu")} onClick={() => setOpen(false)} />
+					<div className="srp-drawer glass glass-2 absolute inset-y-0 start-0 flex flex-col gap-2 rounded-none px-4">
 						<div className="flex items-center justify-between">
 							<Logo name={brandName} />
-							<Button size="icon" variant="ghost" onClick={() => setOpen(false)} aria-label="close menu">
+							<Button size="icon" variant="ghost" onClick={() => setOpen(false)} aria-label={L("بستن منو", "Close menu")}>
 								<X className="h-4 w-4" />
 							</Button>
 						</div>
@@ -200,34 +228,42 @@ export function AppShell({ user, brandName, theme, children }: { user: ShellUser
 				</div>
 			)}
 
-			{/* header (mobile) */}
-			<header className="sticky top-0 z-20 flex items-center justify-between px-4 py-3 backdrop-blur-xl lg:hidden">
-				<Button size="icon" onClick={() => setOpen(true)} aria-label="menu" title={L("منو", "Menu")}>
-					<Menu className="h-5 w-5" />
-				</Button>
-				<Logo name={brandName} compact />
-				<Button size="icon" variant="ghost" onClick={toggleTheme}>
-					{mode === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
-				</Button>
+			{/* mobile header */}
+			<header className="srp-topbar sticky top-0 z-30 lg:hidden">
+				<div className="flex items-center gap-2 px-3 py-2">
+					<Button size="icon" variant="ghost" onClick={() => setOpen(true)} aria-label={L("منو", "Menu")} title={L("منو", "Menu")}>
+						<Menu className="h-5 w-5" />
+					</Button>
+					<div className="min-w-0 flex-1">
+						<div className="truncate text-sm font-semibold leading-tight">{pageTitle}</div>
+						<div className="truncate text-[11px] leading-tight text-muted">{brandName}</div>
+					</div>
+					<Button size="icon" variant="ghost" onClick={toggleLocale} aria-label={L("تغییر زبان", "Change language")}>
+						<Globe2 className="h-4 w-4" />
+					</Button>
+					<Button size="icon" variant="ghost" onClick={toggleTheme} aria-label={L("تغییر تم", "Toggle theme")}>
+						{mode === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+					</Button>
+				</div>
 			</header>
 
-			<main className={cx("mx-auto w-full max-w-7xl px-4 pb-24 pt-2 transition-all duration-300 lg:pb-10 lg:pt-6", rail ? "lg:ps-28" : "lg:ps-72")}>{children}</main>
+			<main className={cx("srp-main mx-auto w-full max-w-7xl px-4 pt-3 transition-all duration-300 lg:pt-6", rail ? "lg:ps-28" : "lg:ps-72")}>{children}</main>
 
-			{/* mobile bottom nav */}
-			<nav className="glass glass-2 fixed inset-x-3 bottom-3 z-30 flex items-center justify-around px-2 py-1.5 lg:hidden">
-				{flat.slice(0, 5).map((n) => {
-					const active = pathname.startsWith(n.href)
+			{/* mobile tab bar */}
+			<nav className="srp-tabbar glass glass-2 fixed inset-x-2 z-40 lg:hidden" aria-label={L("منوی سریع", "Quick navigation")}>
+				{tabs.map((n) => {
+					const active = isActive(n.href)
 					const Icon = n.icon
 					return (
-						<Link key={n.href} href={n.href} className={cx("flex flex-col items-center gap-0.5 rounded-xl px-3 py-1.5 text-[10px]", active ? "text-violet-soft" : "text-muted")}>
+						<Link key={n.href} href={n.href} aria-current={active ? "page" : undefined} className={cx("srp-tab", active && "is-active")}>
 							<Icon className="h-5 w-5" />
-							{navLabel(n)}
+							<span>{tabLabel(n)}</span>
 						</Link>
 					)
 				})}
-				<button type="button" onClick={() => setOpen(true)} aria-label="menu" className="flex flex-col items-center gap-0.5 rounded-xl px-3 py-1.5 text-[10px] text-muted">
-					<Menu className="h-5 w-5" />
-					{locale === "fa" ? "منو" : "More"}
+				<button type="button" onClick={() => setOpen(true)} className="srp-tab" aria-label={L("همهٔ منوها", "All menus")}>
+					<MoreHorizontal className="h-5 w-5" />
+					<span>{L("بیشتر", "More")}</span>
 				</button>
 			</nav>
 		</div>

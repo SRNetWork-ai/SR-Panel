@@ -4,6 +4,7 @@ import type { ReactNode } from "react"
 import "./globals.css"
 import "./nav3d.css"
 import "./motion3d.css"
+import "./mobile.css"
 import { ToastProvider } from "@/components/ui"
 import { currentLocale, currentTheme } from "@/lib/auth"
 import { LocaleProvider } from "@/lib/i18n"
@@ -20,6 +21,8 @@ export const metadata: Metadata = {
 export const viewport: Viewport = {
 	width: "device-width",
 	initialScale: 1,
+	// lets the shell paint under the notch / home indicator; safe areas are handled in mobile.css
+	viewportFit: "cover",
 	themeColor: [
 		{ media: "(prefers-color-scheme: dark)", color: "#06060d" },
 		{ media: "(prefers-color-scheme: light)", color: "#f5f5fa" },

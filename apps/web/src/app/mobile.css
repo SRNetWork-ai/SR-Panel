@@ -1,0 +1,253 @@
+/* SRPanel - mobile & polish layer. Loaded after globals.css / nav3d.css / motion3d.css. */
+
+:root {
+	--srp-safe-t: env(safe-area-inset-top, 0px);
+	--srp-safe-b: env(safe-area-inset-bottom, 0px);
+	--srp-safe-s: env(safe-area-inset-left, 0px);
+	--srp-safe-e: env(safe-area-inset-right, 0px);
+}
+
+* {
+	-webkit-tap-highlight-color: transparent;
+}
+
+:where(a, button, [role="button"], input, select, textarea, summary):focus-visible {
+	outline: 2px solid rgba(139, 92, 246, 0.8);
+	outline-offset: 2px;
+}
+
+/* ---------- app shell ---------- */
+.srp-main {
+	padding-bottom: calc(6rem + var(--srp-safe-b));
+}
+@media (min-width: 1024px) {
+	.srp-main {
+		padding-bottom: 2.5rem;
+	}
+}
+
+.srp-topbar {
+	padding-top: var(--srp-safe-t);
+	background: rgba(6, 6, 13, 0.72);
+	-webkit-backdrop-filter: blur(18px) saturate(140%);
+	backdrop-filter: blur(18px) saturate(140%);
+	border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+}
+html.light .srp-topbar {
+	background: rgba(246, 246, 251, 0.8);
+	border-bottom-color: rgba(15, 15, 40, 0.08);
+}
+
+/* ---------- mobile tab bar ---------- */
+.srp-tabbar {
+	bottom: calc(0.5rem + var(--srp-safe-b));
+	display: flex;
+	align-items: stretch;
+	gap: 0.125rem;
+	padding: 0.3rem;
+}
+.srp-tab {
+	position: relative;
+	display: flex;
+	flex: 1 1 0;
+	min-width: 0;
+	min-height: 52px;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	gap: 0.2rem;
+	border-radius: 14px;
+	padding: 0.3rem 0.15rem;
+	font-size: 10px;
+	line-height: 1.15;
+	text-align: center;
+	color: var(--srp-muted, #9aa0b4);
+	transition: color 0.18s ease, background 0.18s ease, transform 0.14s ease;
+}
+.srp-tab > span {
+	max-width: 100%;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.srp-tab:active {
+	transform: scale(0.95);
+}
+.srp-tab.is-active {
+	color: #fff;
+	background: linear-gradient(180deg, rgba(139, 92, 246, 0.3), rgba(34, 211, 238, 0.14));
+	box-shadow: inset 0 0 0 1px rgba(139, 92, 246, 0.38);
+}
+html.light .srp-tab.is-active {
+	color: #2a1d6b;
+}
+.srp-tab.is-active::after {
+	content: "";
+	position: absolute;
+	top: 4px;
+	width: 18px;
+	height: 3px;
+	border-radius: 999px;
+	background: linear-gradient(90deg, #8b5cf6, #22d3ee);
+}
+
+/* ---------- mobile drawer ---------- */
+.srp-scrim {
+	background: rgba(2, 2, 10, 0.62);
+	-webkit-backdrop-filter: blur(6px);
+	backdrop-filter: blur(6px);
+	animation: srp-fade 0.18s ease both;
+}
+.srp-drawer {
+	width: min(20rem, 86vw);
+	box-shadow: 0 30px 80px rgba(0, 0, 0, 0.55);
+	padding-top: calc(1rem + var(--srp-safe-t));
+	padding-bottom: calc(1rem + var(--srp-safe-b));
+	animation: srp-slide 0.26s cubic-bezier(0.22, 0.8, 0.28, 1) both;
+}
+[dir="rtl"] .srp-drawer {
+	animation-name: srp-slide-rtl;
+}
+@keyframes srp-fade {
+	from {
+		opacity: 0;
+	}
+	to {
+		opacity: 1;
+	}
+}
+@keyframes srp-slide {
+	from {
+		opacity: 0.4;
+		transform: translateX(-18%);
+	}
+	to {
+		opacity: 1;
+		transform: none;
+	}
+}
+@keyframes srp-slide-rtl {
+	from {
+		opacity: 0.4;
+		transform: translateX(18%);
+	}
+	to {
+		opacity: 1;
+		transform: none;
+	}
+}
+
+/* ---------- touch comfort ---------- */
+@media (max-width: 640px) {
+	.input,
+	.select,
+	.textarea,
+	input:not([type="checkbox"]):not([type="radio"]),
+	select,
+	textarea {
+		/* keeps iOS from zooming the page when a field is focused */
+		font-size: 16px;
+	}
+	.btn {
+		min-height: 42px;
+	}
+	.nav-item {
+		min-height: 46px;
+	}
+}
+.scrollbar-thin {
+	-webkit-overflow-scrolling: touch;
+	overscroll-behavior: contain;
+}
+
+/* ---------- login / auth ---------- */
+.srp-auth {
+	display: flex;
+	flex-direction: column;
+	min-height: 100dvh;
+	padding-top: calc(0.75rem + var(--srp-safe-t));
+	padding-bottom: calc(1rem + var(--srp-safe-b));
+}
+.srp-orb {
+	position: fixed;
+	z-index: -1;
+	width: 46vmax;
+	height: 46vmax;
+	border-radius: 50%;
+	filter: blur(70px);
+	opacity: 0.5;
+	pointer-events: none;
+}
+.srp-orb-a {
+	top: -18vmax;
+	inset-inline-start: -14vmax;
+	background: radial-gradient(circle at 30% 30%, rgba(139, 92, 246, 0.75), transparent 65%);
+	animation: srp-float 18s ease-in-out infinite;
+}
+.srp-orb-b {
+	bottom: -20vmax;
+	inset-inline-end: -16vmax;
+	background: radial-gradient(circle at 60% 40%, rgba(34, 211, 238, 0.6), transparent 65%);
+	animation: srp-float 22s ease-in-out infinite reverse;
+}
+@keyframes srp-float {
+	0%,
+	100% {
+		transform: translate3d(0, 0, 0) scale(1);
+	}
+	50% {
+		transform: translate3d(2vmax, 3vmax, 0) scale(1.08);
+	}
+}
+.srp-card {
+	animation: srp-rise 0.35s cubic-bezier(0.22, 0.8, 0.28, 1) both;
+}
+@keyframes srp-rise {
+	from {
+		opacity: 0;
+		transform: translateY(14px);
+	}
+	to {
+		opacity: 1;
+		transform: none;
+	}
+}
+.srp-feature {
+	display: flex;
+	align-items: flex-start;
+	gap: 0.75rem;
+}
+.srp-ico-pill {
+	display: inline-flex;
+	height: 2.5rem;
+	width: 2.5rem;
+	flex: none;
+	align-items: center;
+	justify-content: center;
+	border-radius: 14px;
+	background: linear-gradient(135deg, rgba(139, 92, 246, 0.22), rgba(34, 211, 238, 0.16));
+	box-shadow: inset 0 0 0 1px rgba(139, 92, 246, 0.28);
+	color: #c4b5fd;
+}
+html.light .srp-ico-pill {
+	color: #6d43e8;
+}
+.srp-otp {
+	letter-spacing: 0.45em;
+	text-align: center;
+	font-variant-numeric: tabular-nums;
+}
+
+/* ---------- motion preferences ---------- */
+html.srp-calm .srp-orb {
+	animation: none;
+	opacity: 0.32;
+}
+@media (prefers-reduced-motion: reduce) {
+	.srp-orb,
+	.srp-card,
+	.srp-drawer,
+	.srp-scrim {
+		animation: none !important;
+	}
+}

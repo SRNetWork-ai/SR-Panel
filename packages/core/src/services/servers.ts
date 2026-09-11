@@ -3,6 +3,7 @@ import { decryptSecret, encryptSecret } from "../crypto/secretbox"
 import { XuiAdapter, normalizePanelBaseUrl } from "../panels/xui"
 import type { PanelAuthMode, PanelCapabilities, PanelClientStat, PanelInbound, PanelInboundOption, PanelServerStatus } from "../panels/types"
 import type { StoredInbound } from "../subscription/links"
+import { preferServerHostFromEnv, resolveInboundAddress, type InboundAddressContext, type ResolvedInboundAddress } from "../subscription/host"
 import { AppError, NotFoundError, PanelAuthError } from "../util/errors"
 import { onClientStatusChanged } from "./notifications"
 
@@ -10,6 +11,8 @@ type ServerAuthFields = Pick<
 	Server,
 	"baseUrl" | "username" | "passwordEnc" | "authMode" | "apiTokenEnc" | "totpSecretEnc" | "insecureTls"
 >
+
+type ServerAddressFields = Pick<Server, "baseUrl" | "publicHost" | "statusJson">
 
 export function adapterFor(server: ServerAuthFields): XuiAdapter {
 	return new XuiAdapter({
@@ -23,6 +26,11 @@ export function adapterFor(server: ServerAuthFields): XuiAdapter {
 	})
 }
 
+/**
+ * Server-level host only: the manual override, otherwise the panel hostname.
+ * Configs must not be built from this alone - use `inboundAddressOf` so the address
+ * configured on the inbound wins over the panel domain.
+ */
 export function publicHostOf(server: Pick<Server, "baseUrl" | "publicHost">): string {
 	if (server.publicHost) return server.publicHost
 	try {
@@ -30,6 +38,24 @@ export function publicHostOf(server: Pick<Server, "baseUrl" | "publicHost">): st
 	} catch {
 		return server.baseUrl
 	}
+}
+
+/** Everything the address resolver needs to know about a server. */
+export function serverHostContextOf(server: ServerAddressFields): InboundAddressContext {
+	const status = (server.statusJson ?? null) as { publicIp?: unknown } | null
+	return {
+		publicHost: server.publicHost,
+		baseUrl: server.baseUrl,
+		publicIp: status?.publicIp ?? null,
+		preferServerHost: preferServerHostFromEnv(),
+	}
+}
+
+/** The address a client actually connects to for one inbound of this server. */
+export function inboundAddressOf(server: ServerAddressFields, inbound: StoredInbound): ResolvedInboundAddress {
+	const resolved = resolveInboundAddress(inbound, serverHostContextOf(server))
+	if (resolved.host) return resolved
+	return { host: publicHostOf(server), source: server.publicHost ? "server-public-host" : "panel-url" }
 }
 
 export function inboundsOf(server: Pick<Server, "inboundsJson">): StoredInbound[] {
@@ -140,8 +166,20 @@ export async function syncServer(serverId: string): Promise<{ ok: boolean; inbou
 		const capabilities = await adapter.probe().catch(() => null)
 		const status = await adapter.getStatus()
 		const inbounds = await adapter.listInbounds()
+		// `/panel/api/inbounds/options` is the only endpoint that exposes the per-inbound share
+		// address, so we merge it into the stored inbounds - link building needs it.
+		const options: PanelInboundOption[] =
+			capabilities?.inboundOptions === false ? [] : await adapter.listInboundOptions().catch(() => [] as PanelInboundOption[])
+		const addrByInbound = new Map<number, { shareAddr?: string; nodeAddress?: string }>()
+		for (const o of options) {
+			if (o.shareAddr || o.nodeAddress) addrByInbound.set(o.id, { shareAddr: o.shareAddr, nodeAddress: o.nodeAddress })
+		}
 		const onlines = await adapter.getOnlineEmails().catch(() => [] as string[])
-		const stored = inbounds.map(({ clientStats: _stats, ...rest }) => rest)
+		const stored = inbounds.map(({ clientStats: _stats, ...rest }) => {
+			const extra = addrByInbound.get(rest.id)
+			if (!extra) return rest
+			return { ...rest, shareAddr: extra.shareAddr ?? rest.shareAddr, nodeAddress: extra.nodeAddress ?? rest.nodeAddress }
+		})
 		await prisma.$transaction([
 			prisma.server.update({
 				where: { id: server.id },
