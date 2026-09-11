@@ -28,9 +28,11 @@ services:
       TZ: ${SRP_TZ:-Asia/Tehran}
       SRP_BACKUP_DIR: /app/backups
       SRP_UPLOAD_DIR: /app/uploads
+      SRP_STATE_DIR: /app/state
     volumes:
       - srp_backups:/app/backups
       - srp_uploads:/app/uploads
+      - ./state:/app/state
     depends_on:
       db:
         condition: service_healthy
@@ -54,9 +56,11 @@ services:
       TZ: ${SRP_TZ:-Asia/Tehran}
       SRP_BACKUP_DIR: /app/backups
       SRP_UPLOAD_DIR: /app/uploads
+      SRP_STATE_DIR: /app/state
     volumes:
       - srp_backups:/app/backups
       - srp_uploads:/app/uploads
+      - ./state:/app/state
     depends_on:
       db:
         condition: service_healthy

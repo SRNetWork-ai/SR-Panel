@@ -33,3 +33,5 @@ export * from "./services/tron"
 export * from "./services/storeSettings"
 export * from "./services/payments"
 export * from "./services/store"
+// in-panel updates
+export * from "./services/updates"
