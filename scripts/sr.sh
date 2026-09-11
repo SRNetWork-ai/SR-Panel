@@ -9,6 +9,9 @@ set -Eeuo pipefail
 CONF=/etc/srpanel.conf
 SRP_DIR="${SRP_DIR:-/opt/srpanel}"
 SRP_BRANCH="${SRP_BRANCH:-main}"
+AGENT_BIN=/usr/local/bin/sr-agent
+AGENT_UNIT=/etc/systemd/system/srpanel-agent.service
+STATE_DIR="$SRP_DIR/state"
 # shellcheck disable=SC1090
 [ -f "$CONF" ] && . "$CONF"
 REPO_RAW="https://raw.githubusercontent.com/SRNetWork-ai/SR-Panel"
@@ -64,6 +67,16 @@ cmd_restart() { dc restart; wait_web || true; }
 cmd_logs()    { dc logs -f --tail 200 "$@"; }
 cmd_rebuild() { dc up -d --build --force-recreate --remove-orphans; wait_web || true; }
 cmd_update() {
+	if [ -x "$AGENT_BIN" ]; then
+		info "handing the update to the panel agent (progress also shows inside the panel) …"
+		local rc=0 tp=""
+		mkdir -p "$STATE_DIR/update"
+		tail -n 0 -F "$STATE_DIR/update/update.log" 2>/dev/null & tp=$!
+		"$AGENT_BIN" update || rc=$?
+		sleep 1; [ -n "$tp" ] && kill "$tp" 2>/dev/null || true
+		if [ "$rc" = 0 ]; then ok "update finished — v$(version)"; else warn "update failed — see:  SR agent logs"; fi
+		return 0
+	fi
 	if [ -d .git ]; then
 		info "fetching latest source (origin/$SRP_BRANCH) …"
 		git fetch -q --depth 1 origin "$SRP_BRANCH" && git reset -q --hard "origin/$SRP_BRANCH" && ok "source at $(git rev-parse --short HEAD)" || warn "git update failed — rebuilding current files"
@@ -172,6 +185,73 @@ cmd_uninstall() {
 	if confirm "Delete the source directory $SRP_DIR?"; then cd / && rm -rf "$SRP_DIR"; fi
 	ok "SRPanel uninstalled"
 }
+# ---------- in-panel update agent -------------------------------------------
+agent_unit_write() {
+	cat > "$AGENT_UNIT" <<UNIT
+[Unit]
+Description=SRPanel in-panel update agent
+After=docker.service network-online.target
+Wants=docker.service
+
+[Service]
+Type=simple
+Environment=SRP_DIR=$SRP_DIR
+Environment=SRP_BRANCH=$SRP_BRANCH
+ExecStart=$AGENT_BIN watch
+Restart=always
+RestartSec=5
+KillMode=mixed
+TimeoutStopSec=20
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+}
+agent_cron() {
+	{ crontab -l 2>/dev/null | grep -v "sr-agent run-once" || true; printf '* * * * * %s run-once >/dev/null 2>&1\n' "$AGENT_BIN"; } | crontab - 2>/dev/null \
+		&& ok "agent scheduled with cron (every minute)" || warn "could not install the cron fallback"
+}
+cmd_agent() {
+	local sub="${1:-status}"
+	case "$sub" in
+		install|setup|enable)
+			[ -f "$SRP_DIR/scripts/sr-agent.sh" ] || { warn "scripts/sr-agent.sh not found — run first:  SR update"; return 1; }
+			mkdir -p "$STATE_DIR/update"; chmod 777 "$STATE_DIR" "$STATE_DIR/update" 2>/dev/null || true
+			install -m 755 "$SRP_DIR/scripts/sr-agent.sh" "$AGENT_BIN"
+			printf 'SRP_DIR=%s\nSRP_BRANCH=%s\n' "$SRP_DIR" "$SRP_BRANCH" > "$CONF"
+			if command -v systemctl >/dev/null 2>&1; then
+				agent_unit_write
+				systemctl daemon-reload >/dev/null 2>&1 || true
+				systemctl enable --now srpanel-agent >/dev/null 2>&1 || systemctl restart srpanel-agent >/dev/null 2>&1 || true
+				sleep 2
+				if [ "$(systemctl is-active srpanel-agent 2>/dev/null)" = "active" ]; then
+					ok "update agent is running — you can now update from inside the panel"
+				else
+					warn "systemd unit did not start — using the cron fallback"; agent_cron
+				fi
+			else
+				agent_cron
+			fi
+			if ! grep -q SRP_STATE_DIR "$SRP_DIR/docker-compose.yml" 2>/dev/null; then
+				warn "this install is older than the update feature — run:  SR update"
+			elif ! docker compose exec -T web test -d /app/state >/dev/null 2>&1; then
+				info "mounting the shared state folder into the panel …"; dc up -d >/dev/null 2>&1 || true
+			fi
+			;;
+		status) "$AGENT_BIN" status 2>/dev/null || warn "agent is not installed — run:  SR agent install" ;;
+		logs) tail -n 200 -F "$STATE_DIR/update/update.log" ;;
+		restart) systemctl restart srpanel-agent 2>/dev/null && ok "agent restarted" || warn "no systemd unit — cron fallback runs every minute" ;;
+		check) "$AGENT_BIN" check && ok "check done — see the panel update page" ;;
+		uninstall|remove)
+			systemctl disable --now srpanel-agent >/dev/null 2>&1 || true
+			rm -f "$AGENT_UNIT" "$AGENT_BIN"
+			systemctl daemon-reload >/dev/null 2>&1 || true
+			{ crontab -l 2>/dev/null | grep -v "sr-agent run-once" || true; } | crontab - 2>/dev/null || true
+			ok "update agent removed"
+			;;
+		*) printf 'usage: SR agent [install|status|logs|restart|check|uninstall]\n' ;;
+	esac
+}
 cmd_doctor() {
 	local p holder issues=0 r t
 	r=$(running_count); t=$(total_count)
@@ -209,6 +289,7 @@ ${CB}SR${C0} — SRPanel management console  (v$(version), $SRP_DIR)
   SR start|stop|restart  control services
   SR logs [web|worker|db|caddy]
   SR update              pull latest source, rebuild, restart
+  SR agent [install|status|logs]  enable in-panel updates (panel → Updates)
   SR rebuild             force rebuild of the images
   SR creds               show panel URL and owner login
   SR passwd [user] [pass] reset an admin password (creates the owner if none)
@@ -231,11 +312,11 @@ menu() {
 	while :; do
 		clear 2>/dev/null || true
 		printf '%s%s⚡ SRPanel%s %sv%s · management console%s\n' "$CB" "$CMAG" "$C0" "$CDIM" "$(version)" "$C0"
-		printf '%s────────────────────────────────────────────────────────%s\n' "$CDIM" "$C0"
+		printf '%s──────────────────────────────────────────────────────%s\n' "$CDIM" "$C0"
 		local r t; r=$(running_count); t=$(total_count)
 		if [ "$t" -gt 0 ] && [ "$r" = "$t" ]; then printf ' Status: %s● running%s (%s/%s)   ' "$CGRN" "$C0" "$r" "$t"; elif [ "$r" -gt 0 ]; then printf ' Status: %s● partial%s (%s/%s)   ' "$CYEL" "$C0" "$r" "$t"; else printf ' Status: %s● stopped%s   ' "$CRED" "$C0"; fi
 		printf 'URL: %s\n' "$(env_get SRP_PUBLIC_URL)"
-		printf '%s────────────────────────────────────────────────────────%s\n' "$CDIM" "$C0"
+		printf '%s──────────────────────────────────────────────────────%s\n' "$CDIM" "$C0"
 		cat <<EOF
   1) Status & health          9) Change domain (auto HTTPS)
   2) Start                   10) Change HTTP port
@@ -246,7 +327,7 @@ menu() {
   7) Update to latest        15) Enable BBR
   8) Rebuild images          16) Docker cleanup
 
-  c) Credentials   d) Doctor   a) List admins   s) Shell   u) Uninstall   0) Exit
+  c) Credentials   d) Doctor   g) Update agent   a) List admins   s) Shell   u) Uninstall   0) Exit
 EOF
 		local c; ask c "Select" ""
 		printf '\n'
@@ -255,7 +336,7 @@ EOF
 			5) run cmd_logs web ;; 6) run cmd_logs worker ;; 7) run cmd_update ;; 8) run cmd_rebuild ;;
 			9) run cmd_domain ;; 10) run cmd_port ;; 11) run cmd_passwd ;; 12) run cmd_2fa_off ;;
 			13) run cmd_backup ;; 14) run cmd_restore ;; 15) run cmd_bbr ;; 16) run cmd_cleanup ;;
-			c|C) run cmd_creds ;; d|D) run cmd_doctor ;; a|A) run cmd_admins ;; s|S) run cmd_shell ;; u|U) run cmd_uninstall; exit 0 ;;
+			c|C) run cmd_creds ;; d|D) run cmd_doctor ;; g|G) run cmd_agent install ;; a|A) run cmd_admins ;; s|S) run cmd_shell ;; u|U) run cmd_uninstall; exit 0 ;;
 			0|q|Q|"") exit 0 ;;
 			*) warn "unknown option" ;;
 		esac
@@ -273,6 +354,7 @@ case "$cmd" in
 	restart) cmd_restart ;;
 	logs|log) cmd_logs "$@" ;;
 	update|upgrade) cmd_update ;;
+	agent) cmd_agent "$@" ;;
 	rebuild) cmd_rebuild ;;
 	creds|login|info) cmd_creds ;;
 	passwd|password|reset-password) cmd_passwd "$@" ;;
