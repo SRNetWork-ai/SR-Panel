@@ -5,7 +5,8 @@ export default async function NotFound() {
 	const locale = await currentLocale()
 	const fa = locale === "fa"
 	return (
-		<main className="aurora flex min-h-screen items-center justify-center p-6">
+		<main className="relative flex min-h-screen items-center justify-center p-6">
+			<div className="aurora" />
 			<div className="glass fade-up w-full max-w-md p-8 text-center">
 				<div className="neon-text text-6xl font-black">404</div>
 				<h1 className="mt-3 text-lg font-semibold">{fa ? "صفحه پیدا نشد" : "Page not found"}</h1>

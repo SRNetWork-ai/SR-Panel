@@ -14,7 +14,7 @@ export function Logo({ name = "SRPanel", compact, className }: { name?: string; 
 					<span className="block text-base font-bold tracking-tight">
 						<span className="neon-text">{name}</span>
 					</span>
-					<span className="block text-[10px] text-muted">v1.0 • alpha</span>
+					<span className="block text-[10px] text-muted">v1.2.0</span>
 				</span>
 			)}
 		</div>
