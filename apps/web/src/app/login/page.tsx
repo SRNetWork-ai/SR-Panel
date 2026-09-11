@@ -64,7 +64,7 @@ export default function LoginPage() {
 			<div className="aurora" />
 			<button type="button" onClick={switchLang} className="btn btn-ghost btn-sm absolute top-4 end-4" title={t("language")}>
 				<Languages className="h-4 w-4" />
-				<span>{locale === "fa" ? "EN" : "\u0641\u0627"}</span>
+				<span>{locale === "fa" ? "EN" : "فا"}</span>
 			</button>
 
 			<div className="fade-up w-full max-w-[420px]">
