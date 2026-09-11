@@ -1,6 +1,8 @@
 import type { Metadata, Viewport } from "next"
+import { cookies } from "next/headers"
 import type { ReactNode } from "react"
 import "./globals.css"
+import "./nav3d.css"
 import "./motion3d.css"
 import { ToastProvider } from "@/components/ui"
 import { currentLocale, currentTheme } from "@/lib/auth"
@@ -26,8 +28,10 @@ export const viewport: Viewport = {
 
 export default async function RootLayout({ children }: { children: ReactNode }) {
 	const [locale, theme] = await Promise.all([currentLocale(), currentTheme()])
+	const jar = await cookies()
+	const htmlClass = [theme === "light" ? "light" : "", jar.get("srp_compact")?.value === "1" ? "srp-compact" : "", jar.get("srp_calm")?.value === "1" ? "srp-calm" : ""].filter(Boolean).join(" ")
 	return (
-		<html lang={locale} dir={locale === "fa" ? "rtl" : "ltr"} className={theme === "light" ? "light" : undefined} suppressHydrationWarning>
+		<html lang={locale} dir={locale === "fa" ? "rtl" : "ltr"} className={htmlClass || undefined} suppressHydrationWarning>
 			<body className="min-h-full antialiased">
 				<LocaleProvider locale={locale}>
 					<ToastProvider>{children}</ToastProvider>

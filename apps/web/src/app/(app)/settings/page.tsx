@@ -1,3 +1,4 @@
+import { panelVersion } from "@srpanel/core"
 import { prisma } from "@srpanel/db"
 import { requireAdmin } from "@/lib/auth"
 import { toAdminDto } from "@/lib/dto"
@@ -7,7 +8,7 @@ export const dynamic = "force-dynamic"
 
 export default async function SettingsPage() {
 	const admin = await requireAdmin()
-	const brand = await prisma.brand.findUnique({ where: { adminId: admin.id } })
+	const [brand, version] = await Promise.all([prisma.brand.findUnique({ where: { adminId: admin.id } }), panelVersion()])
 	return (
 		<SettingsClient
 			me={toAdminDto(admin)}
@@ -19,6 +20,12 @@ export default async function SettingsPage() {
 				accentColor: brand?.accentColor ?? "#22d3ee",
 				supportUrl: brand?.supportUrl ?? "",
 				telegramUrl: brand?.telegramUrl ?? "",
+			}}
+			info={{
+				version,
+				publicUrl: process.env.SRP_PUBLIC_URL || "",
+				tz: process.env.TZ || "UTC",
+				agentHint: admin.role === "OWNER",
 			}}
 		/>
 	)
