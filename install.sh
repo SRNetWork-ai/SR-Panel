@@ -405,7 +405,7 @@ port_holder() {
 	local names proc
 	names="$(docker ps --filter "publish=$1" 2>/dev/null | awk 'NR>1 {print $NF}' | tr '\n' ' ' || true)"
 	if [ -n "${names// /}" ]; then printf 'container %s' "${names% }"; return 0; fi
-	proc="$(ss -ltnpH "sport = :$1" 2>/dev/null | head -1 | awk -F'"' '{print $2}' || true)"
+	proc="$(ss -ltnpH "sport = :$1" 2>/dev/null | head -1 | awk -F'\"' '{print $2}' || true)"
 	if [ -n "$proc" ]; then printf '%s' "$proc"; return 0; fi
 	printf 'another program'
 }
@@ -524,25 +524,69 @@ install_cli() {
 	fi
 }
 
+# ---------- 7b. in-panel update agent ----------------------------------------
+install_agent() {
+	mkdir -p "$SRP_DIR/state/update"
+	chmod 777 "$SRP_DIR/state" "$SRP_DIR/state/update" 2>/dev/null || true
+	if [ ! -f "$SRP_DIR/scripts/sr-agent.sh" ]; then
+		warn "scripts/sr-agent.sh not found — in-panel updates disabled"
+		return 0
+	fi
+	install -m 755 "$SRP_DIR/scripts/sr-agent.sh" /usr/local/bin/sr-agent
+	if command -v systemctl >/dev/null 2>&1; then
+		cat > /etc/systemd/system/srpanel-agent.service <<UNIT
+[Unit]
+Description=SRPanel in-panel update agent
+After=docker.service network-online.target
+Wants=docker.service
+
+[Service]
+Type=simple
+Environment=SRP_DIR=$SRP_DIR
+Environment=SRP_BRANCH=$SRP_BRANCH
+ExecStart=/usr/local/bin/sr-agent watch
+Restart=always
+RestartSec=5
+KillMode=mixed
+TimeoutStopSec=20
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+		systemctl daemon-reload >/dev/null 2>&1 || true
+		systemctl enable --now srpanel-agent >/dev/null 2>&1 || true
+		sleep 1
+		if [ "$(systemctl is-active srpanel-agent 2>/dev/null)" = "active" ]; then
+			ok "in-panel updates enabled — panel → Updates page"
+		else
+			warn "update agent did not start — run:  SR agent install"
+		fi
+	else
+		{ crontab -l 2>/dev/null | grep -v "sr-agent run-once" || true; printf '* * * * * /usr/local/bin/sr-agent run-once >/dev/null 2>&1\n'; } | crontab - 2>/dev/null || true
+		ok "in-panel updates enabled via cron"
+	fi
+}
+
 summary() {
 	local url col ttl
 	url="$(env_get SRP_PUBLIC_URL)"
 	if [ "$BUILD_OK" = 1 ]; then col="$CGRN"; ttl="SRPanel is installed"; else col="$CYEL"; ttl="SRPanel is installed — services need attention"; fi
-	printf '\n%s%s════════════════════════════════════════════════════════════%s\n' "$CB" "$col" "$C0"
+	printf '\n%s%s════════════════════════════════════════════════════════%s\n' "$CB" "$col" "$C0"
 	printf '%s  %s %s\n' "$CB" "$ttl" "$C0"
-	printf '%s════════════════════════════════════════════════════════════%s\n' "$col" "$C0"
+	printf '%s════════════════════════════════════════════════════════%s\n' "$col" "$C0"
 	printf '  %-14s %s%s%s\n' "Panel URL:" "$CB" "$url" "$C0"
 	printf '  %-14s %s%s%s\n' "Username:" "$CB" "$(env_get SRP_OWNER_USERNAME)" "$C0"
 	printf '  %-14s %s%s%s\n' "Password:" "$CB" "$(env_get SRP_OWNER_PASSWORD)" "$C0"
 	printf '  %-14s %s\n' "Install dir:" "$SRP_DIR"
 	printf '  %-14s %s\n' "Manage:" "type  SR  (menu)   ·   SR creds   ·   SR doctor   ·   SR logs"
+	printf '  %-14s %s\n' "Updates:" "from the panel → Updates page (no SSH needed)"
 	if [ "$BUILD_OK" != 1 ]; then
 		printf '\n  %sNot running yet:%s diagnose with  %sSR doctor%s  and rebuild with  %sSR rebuild%s\n' "$CYEL" "$C0" "$CB" "$C0" "$CB" "$C0"
 	elif [ -n "$SRP_DOMAIN" ]; then
 		printf '\n  %sTLS:%s Caddy requests a Let'"'"'s Encrypt certificate automatically once DNS for %s points here (ports 80/443 open).\n' "$CDIM" "$C0" "$SRP_DOMAIN"
 	fi
 	printf '\n  %sCredentials are stored in %s/.env (chmod 600). Change the password after first login.%s\n' "$CDIM" "$SRP_DIR" "$C0"
-	printf '%s════════════════════════════════════════════════════════════%s\n\n' "$col" "$C0"
+	printf '%s════════════════════════════════════════════════════════%s\n\n' "$col" "$C0"
 }
 
 # ---------- main -------------------------------------------------------------
@@ -552,7 +596,7 @@ main() {
 	step "1/6  System check";        detect_os; install_deps; install_docker; ensure_swap
 	step "2/6  Source code";         fetch_source; migrate_or_wipe
 	step "3/6  Configuration";       configure
-	step "4/6  Management command";  install_cli
+	step "4/6  Management command";  install_cli; install_agent
 	step "5/6  Assets & network";    fetch_fonts; check_ports
 	step "6/6  Build & start";       build_and_start
 	if [ "$BUILD_OK" = 1 ]; then wait_ready || true; apply_credentials; fi
