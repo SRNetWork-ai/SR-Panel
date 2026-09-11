@@ -3,7 +3,7 @@
 import Link from "next/link"
 import { usePathname, useRouter } from "next/navigation"
 import { useState, type ReactNode } from "react"
-import { Activity, DatabaseBackup, Globe2, LayoutDashboard, LogOut, Menu, Moon, Plug, ScrollText, Server, Settings, ShieldCheck, ShoppingCart, Store, Sun, Users, Wallet, X } from "lucide-react"
+import { Activity, ArrowDownToLine, DatabaseBackup, Globe2, LayoutDashboard, LogOut, Menu, Moon, Plug, ScrollText, Server, Settings, ShieldCheck, ShoppingCart, Store, Sun, Users, Wallet, X } from "lucide-react"
 import { api } from "@/lib/client"
 import { useLocale, useT } from "@/lib/i18n"
 import type { DictKey } from "@/lib/dict"
@@ -16,7 +16,7 @@ export interface ShellUser {
 	role: "OWNER" | "ADMIN"
 }
 
-const NAV: Array<{ href: string; key: DictKey; icon: typeof LayoutDashboard; owner?: boolean }> = [
+const NAV: Array<{ href: string; key?: DictKey; label?: [string, string]; icon: typeof LayoutDashboard; owner?: boolean }> = [
 	{ href: "/dashboard", key: "nav_dashboard", icon: LayoutDashboard },
 	{ href: "/clients", key: "nav_clients", icon: Users },
 	{ href: "/store", key: "nav_store", icon: Store },
@@ -28,6 +28,7 @@ const NAV: Array<{ href: string; key: DictKey; icon: typeof LayoutDashboard; own
 	{ href: "/backups", key: "nav_backups", icon: DatabaseBackup, owner: true },
 	{ href: "/integrations", key: "nav_integrations", icon: Plug },
 	{ href: "/audit", key: "nav_audit", icon: ScrollText, owner: true },
+	{ href: "/updates", label: ["به‌روزرسانی", "Updates"], icon: ArrowDownToLine, owner: true },
 	{ href: "/settings", key: "nav_settings", icon: Settings },
 ]
 
@@ -44,6 +45,7 @@ export function AppShell({ user, brandName, theme, children }: { user: ShellUser
 	const [mode, setMode] = useState(theme)
 
 	const items = NAV.filter((n) => !n.owner || user.role === "OWNER")
+	const navLabel = (n: (typeof NAV)[number]) => (n.label ? n.label[locale === "fa" ? 0 : 1] : t(n.key as DictKey))
 
 	const toggleTheme = () => {
 		const next = mode === "dark" ? "light" : "dark"
@@ -68,7 +70,7 @@ export function AppShell({ user, brandName, theme, children }: { user: ShellUser
 				return (
 					<Link key={n.href} href={n.href} className={cx("nav-item", active && "active")} onClick={() => setOpen(false)}>
 						<Icon className="h-4.5 w-4.5" />
-						<span>{t(n.key)}</span>
+						<span>{navLabel(n)}</span>
 					</Link>
 				)
 			})}
@@ -148,7 +150,7 @@ export function AppShell({ user, brandName, theme, children }: { user: ShellUser
 					return (
 						<Link key={n.href} href={n.href} className={cx("flex flex-col items-center gap-0.5 rounded-xl px-3 py-1.5 text-[10px]", active ? "text-violet-soft" : "text-muted")}>
 							<Icon className="h-5 w-5" />
-							{t(n.key)}
+							{navLabel(n)}
 						</Link>
 					)
 				})}
