@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next"
 import type { ReactNode } from "react"
 import "./globals.css"
+import "./motion3d.css"
 import { ToastProvider } from "@/components/ui"
 import { currentLocale, currentTheme } from "@/lib/auth"
 import { LocaleProvider } from "@/lib/i18n"

@@ -1,0 +1,92 @@
+/* SRPanel - 3D depth and living motion layer (imported from app/layout.tsx) */
+
+/* pointer-driven tilt: the Tilt component writes --rx/--ry/--mx/--my */
+.tilt {
+	position: relative;
+	transform: perspective(900px) rotateX(var(--rx, 0deg)) rotateY(var(--ry, 0deg));
+	transform-style: preserve-3d;
+	transition: transform .35s cubic-bezier(.2, .7, .3, 1);
+	will-change: transform;
+}
+.tilt::after {
+	content: "";
+	position: absolute;
+	inset: 0;
+	border-radius: 1.25rem;
+	background: radial-gradient(260px circle at var(--mx, 50%) var(--my, 50%), rgba(167, 139, 250, 0.16), transparent 62%);
+	opacity: 0;
+	transition: opacity .3s ease;
+	pointer-events: none;
+	z-index: 2;
+}
+.tilt:hover::after { opacity: 1; }
+
+/* every Card renders as <section class="glass">, so cards lift off the page on hover */
+section.glass {
+	transition: transform .4s cubic-bezier(.2, .7, .3, 1), box-shadow .4s ease, border-color .4s ease;
+	will-change: transform;
+}
+section.glass:hover {
+	transform: translateY(-4px) scale(1.006);
+	border-color: rgba(139, 92, 246, 0.42);
+	box-shadow: 0 28px 60px -28px rgba(139, 92, 246, 0.55), inset 0 0 0 1px rgba(139, 92, 246, 0.16);
+}
+
+/* light sweep */
+.sheen { position: relative; overflow: hidden; }
+.sheen::before {
+	content: "";
+	position: absolute;
+	inset: -40% -10%;
+	background: linear-gradient(115deg, transparent 42%, rgba(255, 255, 255, 0.13) 50%, transparent 58%);
+	transform: translateX(-130%);
+	transition: transform .9s ease;
+	pointer-events: none;
+	z-index: 1;
+}
+.sheen:hover::before { transform: translateX(130%); }
+
+/* living background: drifting light orbs + slow parallax grid on the existing .aurora layer */
+.aurora { animation: srp-breathe 26s ease-in-out infinite alternate; }
+.aurora::before {
+	content: "";
+	position: absolute;
+	inset: -25%;
+	background:
+		radial-gradient(22rem 22rem at 14% 18%, rgba(139, 92, 246, 0.30), transparent 70%),
+		radial-gradient(18rem 18rem at 84% 24%, rgba(34, 211, 238, 0.22), transparent 70%),
+		radial-gradient(20rem 20rem at 68% 86%, rgba(232, 121, 249, 0.20), transparent 70%);
+	filter: blur(26px);
+	animation: srp-drift 24s ease-in-out infinite alternate;
+	pointer-events: none;
+}
+.aurora::after { animation: srp-pan 48s linear infinite; }
+
+@keyframes srp-drift {
+	0% { transform: translate3d(0, 0, 0) scale(1); }
+	50% { transform: translate3d(3vw, -3vh, 0) scale(1.1); }
+	100% { transform: translate3d(-3vw, 3vh, 0) scale(0.96); }
+}
+@keyframes srp-breathe {
+	0% { filter: saturate(1) hue-rotate(0deg); }
+	100% { filter: saturate(1.2) hue-rotate(22deg); }
+}
+@keyframes srp-pan {
+	to { background-position: 48px 48px; }
+}
+
+.float { animation: srp-float 7s ease-in-out infinite; }
+@keyframes srp-float {
+	0%, 100% { transform: translateY(0); }
+	50% { transform: translateY(-8px); }
+}
+
+/* depth for KPI numbers */
+.depth { text-shadow: 0 1px 0 rgba(255, 255, 255, 0.12), 0 10px 24px rgba(139, 92, 246, 0.35); }
+
+@media (prefers-reduced-motion: reduce) {
+	.aurora, .aurora::before, .aurora::after, .float { animation: none; }
+	.tilt, section.glass { transition: none; transform: none; }
+	.tilt:hover::after, .sheen:hover::before { opacity: 0; transform: none; }
+	section.glass:hover { transform: none; }
+}

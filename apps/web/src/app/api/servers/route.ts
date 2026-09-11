@@ -15,7 +15,7 @@ export const GET = route(async () => {
 
 export const POST = route(async (req) => {
 	await requireOwner()
-	const body = await parseBody(req, serverSchema.required({ password: true }))
+	const body = await parseBody(req, serverSchema)
 	const server = await createServer(body)
 	return ok(toServerDto(server), { status: 201 })
 })

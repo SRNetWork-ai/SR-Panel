@@ -17,6 +17,12 @@ enum PanelType {
   XUI
 }
 
+/// How SRPanel authenticates against a remote panel (3X-UI v3 supports both)
+enum PanelAuthMode {
+  PASSWORD
+  TOKEN
+}
+
 enum ServerStatus {
   UNKNOWN
   ONLINE
@@ -105,8 +111,19 @@ model Server {
   type           PanelType     @default(XUI)
   /// e.g. https://1.2.3.4:2053/secretpath (no trailing slash)
   baseUrl        String
-  username       String
-  passwordEnc    String
+  username       String        @default("")
+  passwordEnc    String        @default("")
+  authMode       PanelAuthMode @default(PASSWORD)
+  /// Encrypted panel API token (Settings -> Security -> API Token) used for Bearer auth
+  apiTokenEnc    String?
+  /// Encrypted TOTP secret of the panel account so 2FA logins are answered automatically
+  totpSecretEnc  String?
+  /// Accept self-signed panel certificates
+  insecureTls    Boolean       @default(false)
+  /// Panel version reported by /panel/api/server/status
+  panelVersion   String?
+  /// Detected panel capabilities (clients API, inbound options, bearer auth, 2FA)
+  capsJson       Json?
   /// Public host used in generated configs (defaults to baseUrl host)
   publicHost     String?
   /// Optional subscription URL base of the 3x-ui panel itself
