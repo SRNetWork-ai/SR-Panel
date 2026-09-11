@@ -172,12 +172,40 @@ cmd_uninstall() {
 	if confirm "Delete the source directory $SRP_DIR?"; then cd / && rm -rf "$SRP_DIR"; fi
 	ok "SRPanel uninstalled"
 }
+cmd_doctor() {
+	local p holder issues=0 r t
+	r=$(running_count); t=$(total_count)
+	printf '\n%s⚡ SRPanel doctor%s\n' "$CB" "$C0"
+	printf '  %-14s %s\n' "directory" "$SRP_DIR"
+	printf '  %-14s v%s\n' "version" "$(version)"
+	printf '  %-14s %s/%s running\n' "containers" "$r" "$t"
+	if [ "$t" -eq 0 ] || [ "$r" != "$t" ]; then warn "not every container is running — see:  SR logs"; issues=$((issues+1)); fi
+	for p in "$(env_get SRP_HTTP_PORT)" "$(env_get SRP_HTTPS_PORT)"; do
+		[ -n "$p" ] || continue
+		if ss -ltnH "sport = :$p" 2>/dev/null | grep -q .; then
+			holder="$(docker ps --filter "publish=$p" 2>/dev/null | awk 'NR>1 {print $NF}' | tr '\n' ' ')"
+			[ -n "${holder// /}" ] || holder="$(ss -ltnpH "sport = :$p" 2>/dev/null | head -1 | awk -F'"' '{print $2}')"
+			holder="${holder% }"
+			printf '  %-14s listening (%s)\n' "port $p" "${holder:-unknown}"
+			case "$holder" in *srpanel*) ;; *) warn "port $p belongs to another service — move the panel with:  SR port <free port>"; issues=$((issues+1)) ;; esac
+		else
+			printf '  %-14s nothing is listening\n' "port $p"
+			issues=$((issues+1))
+		fi
+	done
+	if [ -n "$(health_json)" ]; then printf '  %-14s ok\n' "health"; else printf '  %-14s no answer\n' "health"; issues=$((issues+1)); fi
+	printf '  %-14s %s\n' "disk free" "$(df -h "$SRP_DIR" 2>/dev/null | awk 'NR==2 {print $4}')"
+	printf '  %-14s %s\n' "memory free" "$(free -h 2>/dev/null | awk 'NR==2 {print $7}')"
+	printf '  %-14s %s\n' "panel url" "$(env_get SRP_PUBLIC_URL)"
+	if [ "$issues" -eq 0 ]; then ok "everything looks healthy"; else warn "$issues problem(s) found — try:  SR rebuild   or   SR logs web"; fi
+}
 cmd_help() {
 	cat <<EOF
 ${CB}SR${C0} — SRPanel management console  (v$(version), $SRP_DIR)
 
   SR                     interactive menu
   SR status              containers + health
+  SR doctor              diagnose ports, health, disk
   SR start|stop|restart  control services
   SR logs [web|worker|db|caddy]
   SR update              pull latest source, rebuild, restart
@@ -218,7 +246,7 @@ menu() {
   7) Update to latest        15) Enable BBR
   8) Rebuild images          16) Docker cleanup
 
-  c) Show login credentials   a) List admins   s) Shell   u) Uninstall   0) Exit
+  c) Credentials   d) Doctor   a) List admins   s) Shell   u) Uninstall   0) Exit
 EOF
 		local c; ask c "Select" ""
 		printf '\n'
@@ -227,7 +255,7 @@ EOF
 			5) run cmd_logs web ;; 6) run cmd_logs worker ;; 7) run cmd_update ;; 8) run cmd_rebuild ;;
 			9) run cmd_domain ;; 10) run cmd_port ;; 11) run cmd_passwd ;; 12) run cmd_2fa_off ;;
 			13) run cmd_backup ;; 14) run cmd_restore ;; 15) run cmd_bbr ;; 16) run cmd_cleanup ;;
-			c|C) run cmd_creds ;; a|A) run cmd_admins ;; s|S) run cmd_shell ;; u|U) run cmd_uninstall; exit 0 ;;
+			c|C) run cmd_creds ;; d|D) run cmd_doctor ;; a|A) run cmd_admins ;; s|S) run cmd_shell ;; u|U) run cmd_uninstall; exit 0 ;;
 			0|q|Q|"") exit 0 ;;
 			*) warn "unknown option" ;;
 		esac
@@ -239,6 +267,7 @@ cmd="${1:-menu}"; shift || true
 case "$cmd" in
 	menu) menu ;;
 	status|st) cmd_status ;;
+	doctor|diagnose|check) cmd_doctor ;;
 	start|up) cmd_start ;;
 	stop|down) cmd_stop ;;
 	restart) cmd_restart ;;

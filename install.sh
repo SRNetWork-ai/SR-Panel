@@ -275,6 +275,7 @@ configure() {
 	dbpass="$(env_get POSTGRES_PASSWORD)"; [ -n "$dbpass" ] && [ "$dbpass" != "change-me-db" ] || dbpass="$(openssl rand -hex 16)"
 	dbuser="$(env_get POSTGRES_USER)"; dbuser="${dbuser:-srpanel}"
 	dbname="$(env_get POSTGRES_DB)"; dbname="${dbname:-srpanel}"
+	SRP_HTTPS_PORT="$(env_get SRP_HTTPS_PORT)"; SRP_HTTPS_PORT="${SRP_HTTPS_PORT:-443}"
 
 	if [ "$reconfigure" = 0 ]; then
 		SRP_DOMAIN="$(env_get SRP_DOMAIN)"
@@ -283,7 +284,7 @@ configure() {
 		SRP_BRAND="$(env_get SRP_BRAND_NAME)"
 		SRP_TZ="$(env_get SRP_TZ)"; SRP_TZ="${SRP_TZ:-Asia/Tehran}"
 		SRP_HTTP_PORT="$(env_get SRP_HTTP_PORT)"; SRP_HTTP_PORT="${SRP_HTTP_PORT:-80}"
-		grep -q '^SRP_HTTP_PORT=' .env || printf 'SRP_HTTP_PORT=%s\nSRP_HTTPS_PORT=443\n' "$SRP_HTTP_PORT" >> .env
+		grep -q '^SRP_HTTP_PORT=' .env || printf 'SRP_HTTP_PORT=%s\nSRP_HTTPS_PORT=%s\n' "$SRP_HTTP_PORT" "$SRP_HTTPS_PORT" >> .env
 		return 0
 	fi
 
@@ -337,7 +338,7 @@ configure() {
 SRP_PUBLIC_URL=$url
 SRP_DOMAIN=$SRP_DOMAIN
 SRP_HTTP_PORT=$SRP_HTTP_PORT
-SRP_HTTPS_PORT=443
+SRP_HTTPS_PORT=$SRP_HTTPS_PORT
 SRP_SECRET=$secret
 SRP_OWNER_USERNAME=$SRP_ADMIN_USER
 SRP_OWNER_PASSWORD=$SRP_ADMIN_PASS
@@ -382,28 +383,110 @@ fetch_fonts() {
 }
 
 # ---------- 5. network -------------------------------------------------------
+env_set() {
+	local k="$1" v="$2"
+	if grep -qE "^$k=" .env 2>/dev/null; then
+		sed -i "s|^$k=.*|$k=$v|" .env
+	else
+		printf '%s=%s\n' "$k" "$v" >> .env
+	fi
+	chmod 600 .env 2>/dev/null || true
+}
+
+port_busy() { ss -ltnH "sport = :$1" 2>/dev/null | grep -q .; }
+
+port_is_ours() {
+	local out
+	out="$(docker ps --filter "publish=$1" --filter "label=com.docker.compose.project=srpanel" -q 2>/dev/null || true)"
+	[ -n "$out" ]
+}
+
+port_holder() {
+	local names proc
+	names="$(docker ps --filter "publish=$1" 2>/dev/null | awk 'NR>1 {print $NF}' | tr '\n' ' ' || true)"
+	if [ -n "${names// /}" ]; then printf 'container %s' "${names% }"; return 0; fi
+	proc="$(ss -ltnpH "sport = :$1" 2>/dev/null | head -1 | awk -F'"' '{print $2}' || true)"
+	if [ -n "$proc" ]; then printf '%s' "$proc"; return 0; fi
+	printf 'another program'
+}
+
+free_port() {
+	local p
+	for p in "$@"; do port_busy "$p" || { printf '%s' "$p"; return 0; }; done
+	for p in $(seq 18080 18120); do port_busy "$p" || { printf '%s' "$p"; return 0; }; done
+	printf '%s' "$1"
+}
+
+set_http_port() {
+	SRP_HTTP_PORT="$1"
+	env_set SRP_HTTP_PORT "$SRP_HTTP_PORT"
+	if [ -z "$SRP_DOMAIN" ]; then
+		local u="http://$(public_ip)"
+		[ "$SRP_HTTP_PORT" = 80 ] || u="$u:$SRP_HTTP_PORT"
+		env_set SRP_PUBLIC_URL "$u"
+	fi
+}
+
+set_https_port() { SRP_HTTPS_PORT="$1"; env_set SRP_HTTPS_PORT "$SRP_HTTPS_PORT"; }
+
 check_ports() {
-	local p busy=""
-	for p in "$SRP_HTTP_PORT" 443; do
-		[ -n "$SRP_DOMAIN" ] || [ "$p" != 443 ] || continue
-		if ss -ltnH "sport = :$p" 2>/dev/null | grep -q . && ! ss -ltnpH "sport = :$p" 2>/dev/null | grep -q docker; then busy="$busy $p"; fi
-	done
-	[ -z "$busy" ] || warn "port(s)$busy already in use by another program (nginx/apache?) — Caddy may fail to start. Free them or use --port="
+	SRP_HTTPS_PORT="${SRP_HTTPS_PORT:-443}"
+	local alt
+	if port_busy "$SRP_HTTP_PORT" && ! port_is_ours "$SRP_HTTP_PORT"; then
+		alt="$(free_port 8080 8880 8000)"
+		warn "port $SRP_HTTP_PORT is already used by $(port_holder "$SRP_HTTP_PORT")"
+		if [ "$ASSUME_YES" = 1 ] || confirm "Run the panel on port $alt instead?" Y; then
+			set_http_port "$alt"; ok "panel HTTP port changed to $alt"
+		else
+			warn "keeping port $SRP_HTTP_PORT — free it first, otherwise the web proxy cannot start"
+		fi
+	fi
+	if port_busy "$SRP_HTTPS_PORT" && ! port_is_ours "$SRP_HTTPS_PORT"; then
+		alt="$(free_port 8443 9443 10443)"
+		if [ -z "$SRP_DOMAIN" ]; then
+			info "port $SRP_HTTPS_PORT is used by $(port_holder "$SRP_HTTPS_PORT") — moving the panel HTTPS bind to $alt (unused without a domain)"
+			set_https_port "$alt"
+		else
+			warn "port $SRP_HTTPS_PORT is used by $(port_holder "$SRP_HTTPS_PORT") — automatic TLS needs it"
+			if [ "$ASSUME_YES" = 1 ] || confirm "Bind the panel to HTTPS port $alt instead?" N; then
+				set_https_port "$alt"; ok "panel HTTPS port changed to $alt"
+			else
+				warn "stop the other service on port $SRP_HTTPS_PORT, then run:  SR start"
+			fi
+		fi
+	fi
 	if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q '^Status: active'; then
 		ufw allow "$SRP_HTTP_PORT/tcp" >/dev/null 2>&1 || true
-		[ -z "$SRP_DOMAIN" ] || ufw allow 443/tcp >/dev/null 2>&1 || true
-		ok "ufw: opened port $SRP_HTTP_PORT${SRP_DOMAIN:+ and 443}"
+		[ -z "$SRP_DOMAIN" ] || ufw allow "$SRP_HTTPS_PORT/tcp" >/dev/null 2>&1 || true
+		ok "ufw: opened port $SRP_HTTP_PORT${SRP_DOMAIN:+ and $SRP_HTTPS_PORT}"
 	fi
 }
 
 # ---------- 6. build & run ---------------------------------------------------
+BUILD_OK=0
+
 build_and_start() {
+	local log busy rc=0
+	log="$(mktemp)"
 	info "building images and starting services — this takes 3-8 minutes on first install …"
-	if ! docker compose up -d --build --remove-orphans; then
-		printf '\n'
-		die "docker compose failed. Check the log above, then run:  cd $SRP_DIR && docker compose up -d --build"
+	docker compose up -d --build --remove-orphans 2>&1 | tee "$log" || rc=1
+	if [ "$rc" -ne 0 ]; then
+		busy="$(sed -n 's/.*Bind for [0-9.]*:\([0-9]*\) failed.*/\1/p' "$log" | head -1)"
+		if [ -n "$busy" ]; then
+			warn "port $busy is already allocated to $(port_holder "$busy") — remapping and retrying once …"
+			if [ "$busy" = "$SRP_HTTPS_PORT" ]; then set_https_port "$(free_port 8443 9443 10443)"
+			elif [ "$busy" = "$SRP_HTTP_PORT" ]; then set_http_port "$(free_port 8080 8880 8000)"
+			fi
+			rc=0
+			docker compose up -d --remove-orphans 2>&1 | tail -n 15 || rc=1
+		fi
 	fi
-	ok "containers started"
+	rm -f "$log"
+	if [ "$rc" -eq 0 ]; then
+		BUILD_OK=1; ok "containers started"
+	else
+		BUILD_OK=0; warn "some services did not start — files are installed, diagnose with:  SR doctor"
+	fi
 }
 
 wait_ready() {
@@ -442,32 +525,37 @@ install_cli() {
 }
 
 summary() {
-	local url; url="$(env_get SRP_PUBLIC_URL)"
-	printf '\n%s%s════════════════════════════════════════════════════════════%s\n' "$CB" "$CGRN" "$C0"
-	printf '%s  SRPanel is installed %s\n' "$CB" "$C0"
-	printf '%s════════════════════════════════════════════════════════════%s\n' "$CGRN" "$C0"
+	local url col ttl
+	url="$(env_get SRP_PUBLIC_URL)"
+	if [ "$BUILD_OK" = 1 ]; then col="$CGRN"; ttl="SRPanel is installed"; else col="$CYEL"; ttl="SRPanel is installed — services need attention"; fi
+	printf '\n%s%s════════════════════════════════════════════════════════════%s\n' "$CB" "$col" "$C0"
+	printf '%s  %s %s\n' "$CB" "$ttl" "$C0"
+	printf '%s════════════════════════════════════════════════════════════%s\n' "$col" "$C0"
 	printf '  %-14s %s%s%s\n' "Panel URL:" "$CB" "$url" "$C0"
 	printf '  %-14s %s%s%s\n' "Username:" "$CB" "$(env_get SRP_OWNER_USERNAME)" "$C0"
 	printf '  %-14s %s%s%s\n' "Password:" "$CB" "$(env_get SRP_OWNER_PASSWORD)" "$C0"
 	printf '  %-14s %s\n' "Install dir:" "$SRP_DIR"
-	printf '  %-14s %s\n' "Manage:" "type  SR  (menu)   ·   SR creds   ·   SR passwd   ·   SR logs"
-	if [ -n "$SRP_DOMAIN" ]; then
+	printf '  %-14s %s\n' "Manage:" "type  SR  (menu)   ·   SR creds   ·   SR doctor   ·   SR logs"
+	if [ "$BUILD_OK" != 1 ]; then
+		printf '\n  %sNot running yet:%s diagnose with  %sSR doctor%s  and rebuild with  %sSR rebuild%s\n' "$CYEL" "$C0" "$CB" "$C0" "$CB" "$C0"
+	elif [ -n "$SRP_DOMAIN" ]; then
 		printf '\n  %sTLS:%s Caddy requests a Let'"'"'s Encrypt certificate automatically once DNS for %s points here (ports 80/443 open).\n' "$CDIM" "$C0" "$SRP_DOMAIN"
 	fi
 	printf '\n  %sCredentials are stored in %s/.env (chmod 600). Change the password after first login.%s\n' "$CDIM" "$SRP_DIR" "$C0"
-	printf '%s════════════════════════════════════════════════════════════%s\n\n' "$CGRN" "$C0"
+	printf '%s════════════════════════════════════════════════════════════%s\n\n' "$col" "$C0"
 }
 
 # ---------- main -------------------------------------------------------------
 main() {
 	banner
 	need_root
-	step "1/6  System check";      detect_os; install_deps; install_docker; ensure_swap
-	step "2/6  Source code";       fetch_source; migrate_or_wipe
-	step "3/6  Configuration";     configure
-	step "4/6  Assets & network";  fetch_fonts; check_ports
-	step "5/6  Build & start";     build_and_start; wait_ready || true; apply_credentials
-	step "6/6  Management CLI";    install_cli
+	step "1/6  System check";        detect_os; install_deps; install_docker; ensure_swap
+	step "2/6  Source code";         fetch_source; migrate_or_wipe
+	step "3/6  Configuration";       configure
+	step "4/6  Management command";  install_cli
+	step "5/6  Assets & network";    fetch_fonts; check_ports
+	step "6/6  Build & start";       build_and_start
+	if [ "$BUILD_OK" = 1 ]; then wait_ready || true; apply_credentials; fi
 	summary
 }
 
