@@ -1,1 +1,506 @@
-import { createHash } from "node:crypto"\nimport { totpCode } from "../security/totp"\nimport { PanelAuthError, PanelError } from "../util/errors"\nimport type {\n\tInboundProtocol,\n\tPanelAdapter,\n\tPanelCapabilities,\n\tPanelClientStat,\n\tPanelConnection,\n\tPanelInbound,\n\tPanelInboundOption,\n\tPanelServerStatus,\n\tProvisionClientInput,\n} from "./types"\n\ntype XuiResponse<T> = { success: boolean; msg?: string; obj?: T }\n\n/** Raised when a route is missing on this panel build, so the caller can fall back to the legacy one. */\nclass MissingEndpointError extends PanelError {\n\tconstructor(path: string) {\n\t\tsuper(`endpoint not available: ${path}`)\n\t\tthis.name = "MissingEndpointError"\n\t}\n}\n\n/**\n * Accepts anything an operator may paste (bare host, host:port, or a deep link inside the\n * panel) and returns origin + webBasePath, which is what every /panel/api/* route hangs off.\n */\nexport function normalizePanelBaseUrl(input: string): string {\n\tlet url = String(input ?? "").trim()\n\tif (!url) return ""\n\tif (!/^https?:\\/\\//i.test(url)) url = "http://" + url\n\turl = url.replace(/[?#].*$/, "").replace(/\\/+$/, "")\n\turl = url.replace(/\\/panel\\/api(\\/.*)?$/i, "")\n\turl = url.replace(/\\/panel\\/(inbounds|clients|settings|xray|nodes|hosts)(\\/.*)?$/i, "")\n\turl = url.replace(/\\/(login|logout)$/i, "")\n\treturn url.replace(/\\/+$/, "")\n}\n\nfunction parseJsonField(v: unknown): Record<string, any> {\n\tif (!v) return {}\n\tif (typeof v === "object") return v as Record<string, any>\n\ttry {\n\t\treturn JSON.parse(String(v)) as Record<string, any>\n\t} catch {\n\t\treturn {}\n\t}\n}\n\n/**\n * Node fetch has no per-request TLS switch, so panels with self-signed certificates are\n * handled by flipping the process flag for the duration of the call (ref-counted).\n */\nlet insecureDepth = 0\nlet insecurePrev: string | undefined\nasync function withTls<T>(insecure: boolean | undefined, fn: () => Promise<T>): Promise<T> {\n\tif (!insecure) return fn()\n\tif (insecureDepth === 0) {\n\t\tinsecurePrev = process.env.NODE_TLS_REJECT_UNAUTHORIZED\n\t\tprocess.env.NODE_TLS_REJECT_UNAUTHORIZED = "0"\n\t}\n\tinsecureDepth++\n\ttry {\n\t\treturn await fn()\n\t} finally {\n\t\tinsecureDepth--\n\t\tif (insecureDepth === 0) {\n\t\t\tif (insecurePrev === undefined) delete process.env.NODE_TLS_REJECT_UNAUTHORIZED\n\t\t\telse process.env.NODE_TLS_REJECT_UNAUTHORIZED = insecurePrev\n\t\t}\n\t}\n}\n\n/** Shadowsocks 2022 needs a PSK sized to the cipher; legacy ciphers accept any string. */\n/**\n * 3x-ui v3 stores the Telegram id as int64: sending a string (even an empty one)\n * makes the panel answer `cannot unmarshal string into Go struct field .client.tgId`.\n */\nexport function toTgId(v: unknown): number {\n\tconst raw = String(v ?? "").trim().replace(/^@/, "")\n\tif (!/^-?\\d{1,18}$/.test(raw)) return 0\n\tconst n = Number(raw)\n\treturn Number.isSafeInteger(n) ? n : 0\n}\n\nexport function shadowsocksPassword(method: string, seed: string): string {\n\tconst m = (method ?? "").toLowerCase()\n\tif (m.includes("2022")) {\n\t\tconst bytes = m.includes("aes-128") ? 16 : 32\n\t\treturn createHash("sha256").update(seed).digest().subarray(0, bytes).toString("base64")\n\t}\n\treturn seed.replace(/-/g, "")\n}\n\n/**\n * 3X-UI adapter (MHSanaei). Speaks the v3 API - Bearer API tokens, first-class\n * /panel/api/clients/* endpoints and /panel/api/inbounds/options - and transparently\n * falls back to the legacy /panel/api/inbounds/* routes on older 2.x builds.\n */\nexport class XuiAdapter implements PanelAdapter {\n\tprivate cookie: string | null = null\n\tprivate csrf: string | null = null\n\tprivate caps: PanelCapabilities | null = null\n\treadonly baseUrl: string\n\tprivate readonly timeoutMs: number\n\n\tconstructor(private readonly conn: PanelConnection, timeoutMs?: number) {\n\t\tthis.baseUrl = normalizePanelBaseUrl(conn.baseUrl)\n\t\tthis.timeoutMs = timeoutMs ?? conn.timeoutMs ?? 15_000\n\t}\n\n\t/** Bearer mode short-circuits the login + CSRF dance entirely. */\n\tprivate get usesToken(): boolean {\n\t\tconst mode = this.conn.authMode ?? (this.conn.apiToken ? "token" : "password")\n\t\treturn mode === "token" && Boolean(this.conn.apiToken)\n\t}\n\n\tprivate url(path: string): string {\n\t\treturn this.baseUrl + path\n\t}\n\n\tprivate async raw(path: string, init: RequestInit = {}): Promise<Response> {\n\t\tconst ctrl = new AbortController()\n\t\tconst timer = setTimeout(() => ctrl.abort(), this.timeoutMs)\n\t\ttry {\n\t\t\tconst headers = new Headers(init.headers)\n\t\t\theaders.set("Accept", "application/json, text/plain, */*")\n\t\t\theaders.set("X-Requested-With", "XMLHttpRequest")\n\t\t\tif (this.usesToken) headers.set("Authorization", `Bearer ${this.conn.apiToken}`)\n\t\t\telse if (this.cookie) headers.set("Cookie", this.cookie)\n\t\t\tconst method = String(init.method ?? "GET").toUpperCase()\n\t\t\tif (this.csrf && method !== "GET") headers.set("X-CSRF-Token", this.csrf)\n\t\t\treturn await withTls(this.conn.insecureTls, () =>\n\t\t\t\tfetch(this.url(path), { ...init, headers, signal: ctrl.signal, redirect: "manual" }),\n\t\t\t)\n\t\t} catch (err) {\n\t\t\tconst msg = err instanceof Error ? err.message : String(err)\n\t\t\tthrow new PanelError(`اتصال به پنل برقرار نشد: ${msg}`)\n\t\t} finally {\n\t\t\tclearTimeout(timer)\n\t\t}\n\t}\n\n\t/** A stored TOTP secret lets us answer the panel 2FA prompt without a human. */\n\tprivate twoFactor(): string | undefined {\n\t\tif (this.conn.twoFactorCode) return this.conn.twoFactorCode.trim()\n\t\tif (this.conn.totpSecret) {\n\t\t\ttry {\n\t\t\t\treturn totpCode(this.conn.totpSecret)\n\t\t\t} catch {\n\t\t\t\treturn undefined\n\t\t\t}\n\t\t}\n\t\treturn undefined\n\t}\n\n\tasync login(): Promise<void> {\n\t\tif (this.usesToken) {\n\t\t\tthis.cookie = null\n\t\t\treturn\n\t\t}\n\t\tconst username = (this.conn.username ?? "").trim()\n\t\tif (!username || !this.conn.password) throw new PanelAuthError("نام کاربری یا رمز عبور پنل تنظیم نشده است")\n\t\tconst body = new URLSearchParams({ username, password: this.conn.password })\n\t\tconst code = this.twoFactor()\n\t\tif (code) {\n\t\t\tbody.set("twoFactorCode", code)\n\t\t\tbody.set("loginSecret", code)\n\t\t}\n\t\tconst res = await this.raw("/login", {\n\t\t\tmethod: "POST",\n\t\t\tbody,\n\t\t\theaders: { "Content-Type": "application/x-www-form-urlencoded" },\n\t\t})\n\t\tconst json = (await res.json().catch(() => null)) as XuiResponse<unknown> | null\n\t\tif (!json?.success) throw new PanelAuthError(json?.msg || `ورود به پنل ناموفق بود (${res.status})`)\n\t\tconst setCookies: string[] =\n\t\t\ttypeof (res.headers as any).getSetCookie === "function"\n\t\t\t\t? (res.headers as any).getSetCookie()\n\t\t\t\t: (res.headers.get("set-cookie") ?? "").split(/,(?=\\s*[A-Za-z0-9_-]+=)/)\n\t\tconst pairs = setCookies.map((c) => c.split(";")[0]!.trim()).filter(Boolean)\n\t\tif (!pairs.length) throw new PanelAuthError("پنل کوکی سشن برنگرداند")\n\t\tthis.cookie = pairs.join("; ")\n\t\tawait this.loadCsrf()\n\t}\n\n\t/** v3 browser sessions replay a CSRF token on unsafe requests; older builds have no such route. */\n\tprivate async loadCsrf(): Promise<void> {\n\t\ttry {\n\t\t\tconst res = await this.raw("/csrf-token", { method: "GET" })\n\t\t\tif (!res.ok) return\n\t\t\tconst json = (await res.json().catch(() => null)) as any\n\t\t\tconst token = typeof json?.obj === "string" ? json.obj : (json?.obj?.token ?? json?.token)\n\t\t\tif (token) this.csrf = String(token)\n\t\t} catch {\n\t\t\t/* pre-v3 panel */\n\t\t}\n\t}\n\n\tprivate async call<T>(path: string, init: RequestInit = {}, retry = true): Promise<T> {\n\t\tif (!this.usesToken && !this.cookie) await this.login()\n\t\tconst res = await this.raw(path, init)\n\t\tif (res.status === 404 || res.status === 405) throw new MissingEndpointError(path)\n\t\tconst contentType = res.headers.get("content-type") ?? ""\n\t\tconst unauthorized = res.status === 401 || res.status === 403\n\t\tif ((res.status >= 300 && res.status < 400) || unauthorized || !contentType.includes("json")) {\n\t\t\tif (retry && !this.usesToken) {\n\t\t\t\tthis.cookie = null\n\t\t\t\tthis.csrf = null\n\t\t\t\tawait this.login()\n\t\t\t\treturn this.call<T>(path, init, false)\n\t\t\t}\n\t\t\tif (unauthorized)\n\t\t\t\tthrow new PanelAuthError(\n\t\t\t\t\tthis.usesToken ? "توکن API پنل نامعتبر است یا دسترسی کافی ندارد" : "نشست پنل معتبر نیست",\n\t\t\t\t)\n\t\t\tthrow new PanelError(`پاسخ غیرمنتظره از پنل (${res.status}) در ${path}`)\n\t\t}\n\t\tconst json = (await res.json()) as XuiResponse<T>\n\t\tif (!json.success) throw new PanelError(json.msg || `خطای پنل در ${path}`)\n\t\treturn json.obj as T\n\t}\n\n\tprivate postJson<T>(path: string, body: unknown): Promise<T> {\n\t\treturn this.call<T>(path, {\n\t\t\tmethod: "POST",\n\t\t\tbody: JSON.stringify(body),\n\t\t\theaders: { "Content-Type": "application/json" },\n\t\t})\n\t}\n\n\t/** Runs the v3 route first and falls back to the legacy one when it is absent. */\n\tprivate async attempt<T>(steps: Array<() => Promise<T>>): Promise<T> {\n\t\tlet last: unknown\n\t\tfor (const step of steps) {\n\t\t\ttry {\n\t\t\t\treturn await step()\n\t\t\t} catch (err) {\n\t\t\t\tif (!(err instanceof MissingEndpointError)) throw err\n\t\t\t\tlast = err\n\t\t\t}\n\t\t}\n\t\tthrow last instanceof Error ? last : new PanelError("این نسخه از پنل، این عملیات را پشتیبانی نمی‌کند")\n\t}\n\n\t/** Detects what this panel build supports; cached for the lifetime of the adapter. */\n\tasync probe(): Promise<PanelCapabilities> {\n\t\tif (this.caps) return this.caps\n\t\tif (!this.usesToken && !this.cookie) await this.login()\n\t\tlet inboundOptions = false\n\t\tlet clientsApi = false\n\t\ttry {\n\t\t\tawait this.call<any[]>("/panel/api/inbounds/options", { method: "GET" })\n\t\t\tinboundOptions = true\n\t\t} catch (err) {\n\t\t\tif (!(err instanceof MissingEndpointError)) throw err\n\t\t}\n\t\ttry {\n\t\t\tawait this.call<any>("/panel/api/clients/groups", { method: "GET" })\n\t\t\tclientsApi = true\n\t\t} catch (err) {\n\t\t\tif (!(err instanceof MissingEndpointError)) throw err\n\t\t}\n\t\tconst status = await this.getStatus().catch(() => null)\n\t\tthis.caps = {\n\t\t\tclientsApi,\n\t\t\tinboundOptions,\n\t\t\tbearerAuth: this.usesToken,\n\t\t\ttwoFactor: await this.twoFactorEnabled(),\n\t\t\tpanelVersion: status?.panelVersion,\n\t\t\txrayVersion: status?.xrayVersion,\n\t\t}\n\t\treturn this.caps\n\t}\n\n\tprivate async twoFactorEnabled(): Promise<boolean> {\n\t\ttry {\n\t\t\tconst r = await this.call<any>("/getTwoFactorEnable", { method: "POST" })\n\t\t\tif (typeof r === "boolean") return r\n\t\t\treturn Boolean(r?.twoFactorEnable ?? r?.enable ?? false)\n\t\t} catch {\n\t\t\treturn false\n\t\t}\n\t}\n\n\tasync getStatus(): Promise<PanelServerStatus> {\n\t\tconst s = await this.attempt<any>([\n\t\t\t() => this.call<any>("/panel/api/server/status", { method: "GET" }),\n\t\t\t() => this.call<any>("/panel/api/server/status", { method: "POST" }),\n\t\t\t() => this.call<any>("/server/status", { method: "POST" }),\n\t\t])\n\t\tconst version = s?.appVersion ?? s?.version ?? s?.panelVersion\n\t\treturn {\n\t\t\tcpu: Number(s?.cpu ?? 0),\n\t\t\tmemUsed: Number(s?.mem?.current ?? 0),\n\t\t\tmemTotal: Number(s?.mem?.total ?? 0),\n\t\t\tdiskUsed: Number(s?.disk?.current ?? 0),\n\t\t\tdiskTotal: Number(s?.disk?.total ?? 0),\n\t\t\tuptime: Number(s?.uptime ?? 0),\n\t\t\txrayState: String(s?.xray?.state ?? "unknown"),\n\t\t\txrayVersion: s?.xray?.version ? String(s.xray.version) : undefined,\n\t\t\tnetUp: Number(s?.netIO?.up ?? 0),\n\t\t\tnetDown: Number(s?.netIO?.down ?? 0),\n\t\t\ttotalSent: Number(s?.netTraffic?.sent ?? 0),\n\t\t\ttotalRecv: Number(s?.netTraffic?.recv ?? 0),\n\t\t\tpublicIp: s?.publicIP?.ipv4 ? String(s.publicIP.ipv4) : undefined,\n\t\t\ttcpCount: Number(s?.tcpCount ?? 0),\n\t\t\tudpCount: Number(s?.udpCount ?? 0),\n\t\t\tpanelVersion: version ? String(version) : undefined,\n\t\t}\n\t}\n\n\tasync listInbounds(): Promise<PanelInbound[]> {\n\t\tconst list = (await this.call<any[]>("/panel/api/inbounds/list", { method: "GET" })) ?? []\n\t\treturn list.map((ib) => ({\n\t\t\tid: Number(ib.id),\n\t\t\tremark: String(ib.remark ?? ""),\n\t\t\tport: Number(ib.port),\n\t\t\tprotocol: String(ib.protocol ?? "vless") as InboundProtocol,\n\t\t\tenable: Boolean(ib.enable),\n\t\t\ttag: String(ib.tag ?? ""),\n\t\t\tlisten: String(ib.listen ?? ""),\n\t\t\tup: Number(ib.up ?? 0),\n\t\t\tdown: Number(ib.down ?? 0),\n\t\t\ttotal: Number(ib.total ?? 0),\n\t\t\texpiryTime: Number(ib.expiryTime ?? 0),\n\t\t\tsettings: parseJsonField(ib.settings),\n\t\t\tstreamSettings: parseJsonField(ib.streamSettings),\n\t\t\tnodeId: ib.nodeId != null ? Number(ib.nodeId) : undefined,\n\t\t\tclientStats: Array.isArray(ib.clientStats)\n\t\t\t\t? ib.clientStats.map(\n\t\t\t\t\t\t(c: any): PanelClientStat => ({\n\t\t\t\t\t\t\temail: String(c.email ?? ""),\n\t\t\t\t\t\t\tup: Number(c.up ?? 0),\n\t\t\t\t\t\t\tdown: Number(c.down ?? 0),\n\t\t\t\t\t\t\ttotal: Number(c.total ?? 0),\n\t\t\t\t\t\t\texpiryTime: Number(c.expiryTime ?? 0),\n\t\t\t\t\t\t\tenable: Boolean(c.enable),\n\t\t\t\t\t\t\tinboundId: Number(c.inboundId ?? ib.id),\n\t\t\t\t\t\t\treset: Number(c.reset ?? 0),\n\t\t\t\t\t\t\tlastOnline: c.lastOnline != null ? Number(c.lastOnline) : undefined,\n\t\t\t\t\t\t}),\n\t\t\t\t\t)\n\t\t\t\t: [],\n\t\t}))\n\t}\n\n\t/** Picker projection used by the \"add panel\" flow - cheap even on panels with 10k clients. */\n\tasync listInboundOptions(): Promise<PanelInboundOption[]> {\n\t\ttry {\n\t\t\tconst list = (await this.call<any[]>("/panel/api/inbounds/options", { method: "GET" })) ?? []\n\t\t\treturn list.map((o) => ({\n\t\t\t\tid: Number(o.id),\n\t\t\t\tremark: String(o.remark ?? ""),\n\t\t\t\ttag: String(o.tag ?? ""),\n\t\t\t\tprotocol: String(o.protocol ?? "vless") as InboundProtocol,\n\t\t\t\tport: Number(o.port ?? 0),\n\t\t\t\tlisten: o.listen ? String(o.listen) : undefined,\n\t\t\t\tenable: o.enable !== false,\n\t\t\t\ttlsFlowCapable: Boolean(o.tlsFlowCapable),\n\t\t\t\tssMethod: String(o.ssMethod ?? ""),\n\t\t\t\tnodeId: o.nodeId != null ? Number(o.nodeId) : undefined,\n\t\t\t\tnodeAddress: o.nodeAddress ? String(o.nodeAddress) : undefined,\n\t\t\t\tshareAddr: o.shareAddr ? String(o.shareAddr) : undefined,\n\t\t\t}))\n\t\t} catch (err) {\n\t\t\tif (!(err instanceof MissingEndpointError)) throw err\n\t\t\treturn (await this.listInbounds()).map((i) => {\n\t\t\t\tconst network = String(i.streamSettings?.network ?? "tcp")\n\t\t\t\tconst security = String(i.streamSettings?.security ?? "none")\n\t\t\t\treturn {\n\t\t\t\t\tid: i.id,\n\t\t\t\t\tremark: i.remark,\n\t\t\t\t\ttag: i.tag,\n\t\t\t\t\tprotocol: i.protocol,\n\t\t\t\t\tport: i.port,\n\t\t\t\t\tlisten: i.listen || undefined,\n\t\t\t\t\tenable: i.enable,\n\t\t\t\t\ttlsFlowCapable:\n\t\t\t\t\t\ti.protocol === "vless" && network === "tcp" && (security === "tls" || security === "reality"),\n\t\t\t\t\tssMethod: i.protocol === "shadowsocks" ? String(i.settings?.method ?? "") : "",\n\t\t\t\t}\n\t\t\t})\n\t\t}\n\t}\n\n\t/** The per-protocol client row shared by the v3 clients API and the legacy settings blob. */\n\tprivate clientObject(protocol: InboundProtocol, c: ProvisionClientInput, legacy = false): Record<string, unknown> {\n\t\tconst tg = toTgId(c.tgId)\n\t\tconst base = {\n\t\t\temail: c.email,\n\t\t\tlimitIp: Number(c.limitIp) || 0,\n\t\t\ttotalGB: Number(c.totalBytes) || 0,\n\t\t\texpiryTime: Number(c.expiryTimeMs) || 0,\n\t\t\tenable: c.enable !== false,\n\t\t\t// v3 expects int64, panels older than 2.4 expect a string\n\t\t\ttgId: legacy ? (tg ? String(tg) : "") : tg,\n\t\t\tsubId: c.subId,\n\t\t\treset: 0,\n\t\t\tcomment: c.comment ?? "",\n\t\t\tgroup: c.group ?? "",\n\t\t\tlimitHwid: Number(c.limitHwid) || 0,\n\t\t}\n\t\tswitch (protocol) {\n\t\t\tcase "vmess":\n\t\t\t\treturn { id: c.uuid, security: "auto", ...base }\n\t\t\tcase "trojan":\n\t\t\t\treturn { password: c.uuid, flow: "", ...base }\n\t\t\tcase "shadowsocks":\n\t\t\t\treturn { method: c.ssMethod ?? "", password: shadowsocksPassword(c.ssMethod ?? "", c.uuid), ...base }\n\t\t\tcase "vless":\n\t\t\tdefault:\n\t\t\t\treturn { id: c.uuid, flow: c.flow ?? "", ...base }\n\t\t}\n\t}\n\n\t/** Legacy routes address a client by its secret: uuid for vless/vmess, password for trojan/ss. */\n\tprivate clientKey(protocol: InboundProtocol, uuid: string, ssMethod?: string): string {\n\t\tif (protocol === "shadowsocks") return shadowsocksPassword(ssMethod ?? "", uuid)\n\t\treturn uuid\n\t}\n\n\tasync addClient(inboundId: number, protocol: InboundProtocol, c: ProvisionClientInput): Promise<void> {\n\t\tawait this.attempt([\n\t\t\t() =>\n\t\t\t\tthis.postJson("/panel/api/clients/add", {\n\t\t\t\t\tclient: this.clientObject(protocol, c),\n\t\t\t\t\tinboundIds: [inboundId],\n\t\t\t\t}),\n\t\t\t() =>\n\t\t\t\tthis.postJson("/panel/api/inbounds/addClient", {\n\t\t\t\t\tid: inboundId,\n\t\t\t\t\tsettings: JSON.stringify({ clients: [this.clientObject(protocol, c, true)] }),\n\t\t\t\t}),\n\t\t])\n\t}\n\n\tasync updateClient(inboundId: number, protocol: InboundProtocol, c: ProvisionClientInput): Promise<void> {\n\t\tconst key = encodeURIComponent(this.clientKey(protocol, c.uuid, c.ssMethod))\n\t\tawait this.attempt([\n\t\t\t() =>\n\t\t\t\tthis.postJson(`/panel/api/clients/update/${encodeURIComponent(c.email)}`, {\n\t\t\t\t\tclient: this.clientObject(protocol, c),\n\t\t\t\t\tinboundIds: [inboundId],\n\t\t\t\t}),\n\t\t\t() =>\n\t\t\t\tthis.postJson(`/panel/api/inbounds/updateClient/${key}`, {\n\t\t\t\t\tid: inboundId,\n\t\t\t\t\tsettings: JSON.stringify({ clients: [this.clientObject(protocol, c, true)] }),\n\t\t\t\t}),\n\t\t])\n\t}\n\n\tasync deleteClient(\n\t\tinboundId: number,\n\t\tprotocol: InboundProtocol,\n\t\tc: { uuid: string; email: string; ssMethod?: string },\n\t): Promise<void> {\n\t\tconst key = encodeURIComponent(this.clientKey(protocol, c.uuid, c.ssMethod))\n\t\tawait this.attempt([\n\t\t\t() => this.call(`/panel/api/clients/del/${encodeURIComponent(c.email)}`, { method: "POST" }),\n\t\t\t() => this.call(`/panel/api/inbounds/${inboundId}/delClient/${key}`, { method: "POST" }),\n\t\t])\n\t}\n\n\tasync resetClientTraffic(inboundId: number, email: string): Promise<void> {\n\t\tawait this.attempt([\n\t\t\t() => this.call(`/panel/api/clients/resetTraffic/${encodeURIComponent(email)}`, { method: "POST" }),\n\t\t\t() => this.call(`/panel/api/inbounds/${inboundId}/resetClientTraffic/${encodeURIComponent(email)}`, { method: "POST" }),\n\t\t])\n\t}\n\n\tasync getOnlineEmails(): Promise<string[]> {\n\t\tconst list = await this.attempt<string[] | null>([\n\t\t\t() => this.call<string[] | null>("/panel/api/clients/onlines", { method: "POST" }),\n\t\t\t() => this.call<string[] | null>("/panel/api/inbounds/onlines", { method: "POST" }),\n\t\t])\n\t\treturn Array.isArray(list) ? list.map(String) : []\n\t}\n\n\t/** Every share URL of one client across the inbounds it is attached to (v3 only). */\n\tasync getClientLinks(email: string): Promise<string[]> {\n\t\ttry {\n\t\t\tconst list = await this.call<string[] | null>(`/panel/api/clients/links/${encodeURIComponent(email)}`, {\n\t\t\t\tmethod: "GET",\n\t\t\t})\n\t\t\treturn Array.isArray(list) ? list.map(String) : []\n\t\t} catch (err) {\n\t\t\tif (err instanceof MissingEndpointError) return []\n\t\t\tthrow err\n\t\t}\n\t}\n\n\tasync getSubLinks(subId: string): Promise<string[]> {\n\t\ttry {\n\t\t\tconst list = await this.call<string[] | null>(`/panel/api/clients/subLinks/${encodeURIComponent(subId)}`, {\n\t\t\t\tmethod: "GET",\n\t\t\t})\n\t\t\treturn Array.isArray(list) ? list.map(String) : []\n\t\t} catch (err) {\n\t\t\tif (err instanceof MissingEndpointError) return []\n\t\t\tthrow err\n\t\t}\n\t}\n}\n
+import { createHash } from "node:crypto"
+import { totpCode } from "../security/totp"
+import { PanelAuthError, PanelError } from "../util/errors"
+import type {
+	InboundProtocol,
+	PanelAdapter,
+	PanelCapabilities,
+	PanelClientStat,
+	PanelConnection,
+	PanelInbound,
+	PanelInboundOption,
+	PanelServerStatus,
+	ProvisionClientInput,
+} from "./types"
+
+type XuiResponse<T> = { success: boolean; msg?: string; obj?: T }
+
+/** Raised when a route is missing on this panel build, so the caller can fall back to the legacy one. */
+class MissingEndpointError extends PanelError {
+	constructor(path: string) {
+		super(`endpoint not available: ${path}`)
+		this.name = "MissingEndpointError"
+	}
+}
+
+/**
+ * Accepts anything an operator may paste (bare host, host:port, or a deep link inside the
+ * panel) and returns origin + webBasePath, which is what every /panel/api/* route hangs off.
+ */
+export function normalizePanelBaseUrl(input: string): string {
+	let url = String(input ?? "").trim()
+	if (!url) return ""
+	if (!/^https?:\/\//i.test(url)) url = "http://" + url
+	url = url.replace(/[?#].*$/, "").replace(/\/+$/, "")
+	url = url.replace(/\/panel\/api(\/.*)?$/i, "")
+	url = url.replace(/\/panel\/(inbounds|clients|settings|xray|nodes|hosts)(\/.*)?$/i, "")
+	url = url.replace(/\/(login|logout)$/i, "")
+	return url.replace(/\/+$/, "")
+}
+
+function parseJsonField(v: unknown): Record<string, any> {
+	if (!v) return {}
+	if (typeof v === "object") return v as Record<string, any>
+	try {
+		return JSON.parse(String(v)) as Record<string, any>
+	} catch {
+		return {}
+	}
+}
+
+/**
+ * Node fetch has no per-request TLS switch, so panels with self-signed certificates are
+ * handled by flipping the process flag for the duration of the call (ref-counted).
+ */
+let insecureDepth = 0
+let insecurePrev: string | undefined
+async function withTls<T>(insecure: boolean | undefined, fn: () => Promise<T>): Promise<T> {
+	if (!insecure) return fn()
+	if (insecureDepth === 0) {
+		insecurePrev = process.env.NODE_TLS_REJECT_UNAUTHORIZED
+		process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0"
+	}
+	insecureDepth++
+	try {
+		return await fn()
+	} finally {
+		insecureDepth--
+		if (insecureDepth === 0) {
+			if (insecurePrev === undefined) delete process.env.NODE_TLS_REJECT_UNAUTHORIZED
+			else process.env.NODE_TLS_REJECT_UNAUTHORIZED = insecurePrev
+		}
+	}
+}
+
+/** Shadowsocks 2022 needs a PSK sized to the cipher; legacy ciphers accept any string. */
+/**
+ * 3x-ui v3 stores the Telegram id as int64: sending a string (even an empty one)
+ * makes the panel answer `cannot unmarshal string into Go struct field .client.tgId`.
+ */
+export function toTgId(v: unknown): number {
+	const raw = String(v ?? "").trim().replace(/^@/, "")
+	if (!/^-?\d{1,18}$/.test(raw)) return 0
+	const n = Number(raw)
+	return Number.isSafeInteger(n) ? n : 0
+}
+
+export function shadowsocksPassword(method: string, seed: string): string {
+	const m = (method ?? "").toLowerCase()
+	if (m.includes("2022")) {
+		const bytes = m.includes("aes-128") ? 16 : 32
+		return createHash("sha256").update(seed).digest().subarray(0, bytes).toString("base64")
+	}
+	return seed.replace(/-/g, "")
+}
+
+/**
+ * 3X-UI adapter (MHSanaei). Speaks the v3 API - Bearer API tokens, first-class
+ * /panel/api/clients/* endpoints and /panel/api/inbounds/options - and transparently
+ * falls back to the legacy /panel/api/inbounds/* routes on older 2.x builds.
+ */
+export class XuiAdapter implements PanelAdapter {
+	private cookie: string | null = null
+	private csrf: string | null = null
+	private caps: PanelCapabilities | null = null
+	readonly baseUrl: string
+	private readonly timeoutMs: number
+
+	constructor(private readonly conn: PanelConnection, timeoutMs?: number) {
+		this.baseUrl = normalizePanelBaseUrl(conn.baseUrl)
+		this.timeoutMs = timeoutMs ?? conn.timeoutMs ?? 15_000
+	}
+
+	/** Bearer mode short-circuits the login + CSRF dance entirely. */
+	private get usesToken(): boolean {
+		const mode = this.conn.authMode ?? (this.conn.apiToken ? "token" : "password")
+		return mode === "token" && Boolean(this.conn.apiToken)
+	}
+
+	private url(path: string): string {
+		return this.baseUrl + path
+	}
+
+	private async raw(path: string, init: RequestInit = {}): Promise<Response> {
+		const ctrl = new AbortController()
+		const timer = setTimeout(() => ctrl.abort(), this.timeoutMs)
+		try {
+			const headers = new Headers(init.headers)
+			headers.set("Accept", "application/json, text/plain, */*")
+			headers.set("X-Requested-With", "XMLHttpRequest")
+			if (this.usesToken) headers.set("Authorization", `Bearer ${this.conn.apiToken}`)
+			else if (this.cookie) headers.set("Cookie", this.cookie)
+			const method = String(init.method ?? "GET").toUpperCase()
+			if (this.csrf && method !== "GET") headers.set("X-CSRF-Token", this.csrf)
+			return await withTls(this.conn.insecureTls, () =>
+				fetch(this.url(path), { ...init, headers, signal: ctrl.signal, redirect: "manual" }),
+			)
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : String(err)
+			throw new PanelError(`اتصال به پنل برقرار نشد: ${msg}`)
+		} finally {
+			clearTimeout(timer)
+		}
+	}
+
+	/** A stored TOTP secret lets us answer the panel 2FA prompt without a human. */
+	private twoFactor(): string | undefined {
+		if (this.conn.twoFactorCode) return this.conn.twoFactorCode.trim()
+		if (this.conn.totpSecret) {
+			try {
+				return totpCode(this.conn.totpSecret)
+			} catch {
+				return undefined
+			}
+		}
+		return undefined
+	}
+
+	async login(): Promise<void> {
+		if (this.usesToken) {
+			this.cookie = null
+			return
+		}
+		const username = (this.conn.username ?? "").trim()
+		if (!username || !this.conn.password) throw new PanelAuthError("نام کاربری یا رمز عبور پنل تنظیم نشده است")
+		const body = new URLSearchParams({ username, password: this.conn.password })
+		const code = this.twoFactor()
+		if (code) {
+			body.set("twoFactorCode", code)
+			body.set("loginSecret", code)
+		}
+		const res = await this.raw("/login", {
+			method: "POST",
+			body,
+			headers: { "Content-Type": "application/x-www-form-urlencoded" },
+		})
+		const json = (await res.json().catch(() => null)) as XuiResponse<unknown> | null
+		if (!json?.success) throw new PanelAuthError(json?.msg || `ورود به پنل ناموفق بود (${res.status})`)
+		const setCookies: string[] =
+			typeof (res.headers as any).getSetCookie === "function"
+				? (res.headers as any).getSetCookie()
+				: (res.headers.get("set-cookie") ?? "").split(/,(?=\s*[A-Za-z0-9_-]+=)/)
+		const pairs = setCookies.map((c) => c.split(";")[0]!.trim()).filter(Boolean)
+		if (!pairs.length) throw new PanelAuthError("پنل کوکی سشن برنگرداند")
+		this.cookie = pairs.join("; ")
+		await this.loadCsrf()
+	}
+
+	/** v3 browser sessions replay a CSRF token on unsafe requests; older builds have no such route. */
+	private async loadCsrf(): Promise<void> {
+		try {
+			const res = await this.raw("/csrf-token", { method: "GET" })
+			if (!res.ok) return
+			const json = (await res.json().catch(() => null)) as any
+			const token = typeof json?.obj === "string" ? json.obj : (json?.obj?.token ?? json?.token)
+			if (token) this.csrf = String(token)
+		} catch {
+			/* pre-v3 panel */
+		}
+	}
+
+	private async call<T>(path: string, init: RequestInit = {}, retry = true): Promise<T> {
+		if (!this.usesToken && !this.cookie) await this.login()
+		const res = await this.raw(path, init)
+		if (res.status === 404 || res.status === 405) throw new MissingEndpointError(path)
+		const contentType = res.headers.get("content-type") ?? ""
+		const unauthorized = res.status === 401 || res.status === 403
+		if ((res.status >= 300 && res.status < 400) || unauthorized || !contentType.includes("json")) {
+			if (retry && !this.usesToken) {
+				this.cookie = null
+				this.csrf = null
+				await this.login()
+				return this.call<T>(path, init, false)
+			}
+			if (unauthorized)
+				throw new PanelAuthError(
+					this.usesToken ? "توکن API پنل نامعتبر است یا دسترسی کافی ندارد" : "نشست پنل معتبر نیست",
+				)
+			throw new PanelError(`پاسخ غیرمنتظره از پنل (${res.status}) در ${path}`)
+		}
+		const json = (await res.json()) as XuiResponse<T>
+		if (!json.success) throw new PanelError(json.msg || `خطای پنل در ${path}`)
+		return json.obj as T
+	}
+
+	private postJson<T>(path: string, body: unknown): Promise<T> {
+		return this.call<T>(path, {
+			method: "POST",
+			body: JSON.stringify(body),
+			headers: { "Content-Type": "application/json" },
+		})
+	}
+
+	/** Runs the v3 route first and falls back to the legacy one when it is absent. */
+	private async attempt<T>(steps: Array<() => Promise<T>>): Promise<T> {
+		let last: unknown
+		for (const step of steps) {
+			try {
+				return await step()
+			} catch (err) {
+				if (!(err instanceof MissingEndpointError)) throw err
+				last = err
+			}
+		}
+		throw last instanceof Error ? last : new PanelError("این نسخه از پنل، این عملیات را پشتیبانی نمی‌کند")
+	}
+
+	/** Detects what this panel build supports; cached for the lifetime of the adapter. */
+	async probe(): Promise<PanelCapabilities> {
+		if (this.caps) return this.caps
+		if (!this.usesToken && !this.cookie) await this.login()
+		let inboundOptions = false
+		let clientsApi = false
+		try {
+			await this.call<any[]>("/panel/api/inbounds/options", { method: "GET" })
+			inboundOptions = true
+		} catch (err) {
+			if (!(err instanceof MissingEndpointError)) throw err
+		}
+		try {
+			await this.call<any>("/panel/api/clients/groups", { method: "GET" })
+			clientsApi = true
+		} catch (err) {
+			if (!(err instanceof MissingEndpointError)) throw err
+		}
+		const status = await this.getStatus().catch(() => null)
+		this.caps = {
+			clientsApi,
+			inboundOptions,
+			bearerAuth: this.usesToken,
+			twoFactor: await this.twoFactorEnabled(),
+			panelVersion: status?.panelVersion,
+			xrayVersion: status?.xrayVersion,
+		}
+		return this.caps
+	}
+
+	private async twoFactorEnabled(): Promise<boolean> {
+		try {
+			const r = await this.call<any>("/getTwoFactorEnable", { method: "POST" })
+			if (typeof r === "boolean") return r
+			return Boolean(r?.twoFactorEnable ?? r?.enable ?? false)
+		} catch {
+			return false
+		}
+	}
+
+	async getStatus(): Promise<PanelServerStatus> {
+		const s = await this.attempt<any>([
+			() => this.call<any>("/panel/api/server/status", { method: "GET" }),
+			() => this.call<any>("/panel/api/server/status", { method: "POST" }),
+			() => this.call<any>("/server/status", { method: "POST" }),
+		])
+		const version = s?.appVersion ?? s?.version ?? s?.panelVersion
+		return {
+			cpu: Number(s?.cpu ?? 0),
+			memUsed: Number(s?.mem?.current ?? 0),
+			memTotal: Number(s?.mem?.total ?? 0),
+			diskUsed: Number(s?.disk?.current ?? 0),
+			diskTotal: Number(s?.disk?.total ?? 0),
+			uptime: Number(s?.uptime ?? 0),
+			xrayState: String(s?.xray?.state ?? "unknown"),
+			xrayVersion: s?.xray?.version ? String(s.xray.version) : undefined,
+			netUp: Number(s?.netIO?.up ?? 0),
+			netDown: Number(s?.netIO?.down ?? 0),
+			totalSent: Number(s?.netTraffic?.sent ?? 0),
+			totalRecv: Number(s?.netTraffic?.recv ?? 0),
+			publicIp: s?.publicIP?.ipv4 ? String(s.publicIP.ipv4) : undefined,
+			tcpCount: Number(s?.tcpCount ?? 0),
+			udpCount: Number(s?.udpCount ?? 0),
+			panelVersion: version ? String(version) : undefined,
+		}
+	}
+
+	async listInbounds(): Promise<PanelInbound[]> {
+		const list = (await this.call<any[]>("/panel/api/inbounds/list", { method: "GET" })) ?? []
+		return list.map((ib) => ({
+			id: Number(ib.id),
+			remark: String(ib.remark ?? ""),
+			port: Number(ib.port),
+			protocol: String(ib.protocol ?? "vless") as InboundProtocol,
+			enable: Boolean(ib.enable),
+			tag: String(ib.tag ?? ""),
+			listen: String(ib.listen ?? ""),
+			up: Number(ib.up ?? 0),
+			down: Number(ib.down ?? 0),
+			total: Number(ib.total ?? 0),
+			expiryTime: Number(ib.expiryTime ?? 0),
+			settings: parseJsonField(ib.settings),
+			streamSettings: parseJsonField(ib.streamSettings),
+			nodeId: ib.nodeId != null ? Number(ib.nodeId) : undefined,
+			clientStats: Array.isArray(ib.clientStats)
+				? ib.clientStats.map(
+						(c: any): PanelClientStat => ({
+							email: String(c.email ?? ""),
+							up: Number(c.up ?? 0),
+							down: Number(c.down ?? 0),
+							total: Number(c.total ?? 0),
+							expiryTime: Number(c.expiryTime ?? 0),
+							enable: Boolean(c.enable),
+							inboundId: Number(c.inboundId ?? ib.id),
+							reset: Number(c.reset ?? 0),
+							lastOnline: c.lastOnline != null ? Number(c.lastOnline) : undefined,
+						}),
+					)
+				: [],
+		}))
+	}
+
+	/** Picker projection used by the "add panel" flow - cheap even on panels with 10k clients. */
+	async listInboundOptions(): Promise<PanelInboundOption[]> {
+		try {
+			const list = (await this.call<any[]>("/panel/api/inbounds/options", { method: "GET" })) ?? []
+			return list.map((o) => ({
+				id: Number(o.id),
+				remark: String(o.remark ?? ""),
+				tag: String(o.tag ?? ""),
+				protocol: String(o.protocol ?? "vless") as InboundProtocol,
+				port: Number(o.port ?? 0),
+				listen: o.listen ? String(o.listen) : undefined,
+				enable: o.enable !== false,
+				tlsFlowCapable: Boolean(o.tlsFlowCapable),
+				ssMethod: String(o.ssMethod ?? ""),
+				nodeId: o.nodeId != null ? Number(o.nodeId) : undefined,
+				nodeAddress: o.nodeAddress ? String(o.nodeAddress) : undefined,
+				shareAddr: o.shareAddr ? String(o.shareAddr) : undefined,
+			}))
+		} catch (err) {
+			if (!(err instanceof MissingEndpointError)) throw err
+			return (await this.listInbounds()).map((i) => {
+				const network = String(i.streamSettings?.network ?? "tcp")
+				const security = String(i.streamSettings?.security ?? "none")
+				return {
+					id: i.id,
+					remark: i.remark,
+					tag: i.tag,
+					protocol: i.protocol,
+					port: i.port,
+					listen: i.listen || undefined,
+					enable: i.enable,
+					tlsFlowCapable:
+						i.protocol === "vless" && network === "tcp" && (security === "tls" || security === "reality"),
+					ssMethod: i.protocol === "shadowsocks" ? String(i.settings?.method ?? "") : "",
+				}
+			})
+		}
+	}
+
+	/** The per-protocol client row shared by the v3 clients API and the legacy settings blob. */
+	private clientObject(protocol: InboundProtocol, c: ProvisionClientInput, legacy = false): Record<string, unknown> {
+		const tg = toTgId(c.tgId)
+		const base = {
+			email: c.email,
+			limitIp: Number(c.limitIp) || 0,
+			totalGB: Number(c.totalBytes) || 0,
+			expiryTime: Number(c.expiryTimeMs) || 0,
+			enable: c.enable !== false,
+			// v3 expects int64, panels older than 2.4 expect a string
+			tgId: legacy ? (tg ? String(tg) : "") : tg,
+			subId: c.subId,
+			reset: 0,
+			comment: c.comment ?? "",
+			group: c.group ?? "",
+			limitHwid: Number(c.limitHwid) || 0,
+		}
+		switch (protocol) {
+			case "vmess":
+				return { id: c.uuid, security: "auto", ...base }
+			case "trojan":
+				return { password: c.uuid, flow: "", ...base }
+			case "shadowsocks":
+				return { method: c.ssMethod ?? "", password: shadowsocksPassword(c.ssMethod ?? "", c.uuid), ...base }
+			case "vless":
+			default:
+				return { id: c.uuid, flow: c.flow ?? "", ...base }
+		}
+	}
+
+	/** Legacy routes address a client by its secret: uuid for vless/vmess, password for trojan/ss. */
+	private clientKey(protocol: InboundProtocol, uuid: string, ssMethod?: string): string {
+		if (protocol === "shadowsocks") return shadowsocksPassword(ssMethod ?? "", uuid)
+		return uuid
+	}
+
+	async addClient(inboundId: number, protocol: InboundProtocol, c: ProvisionClientInput): Promise<void> {
+		await this.attempt([
+			() =>
+				this.postJson("/panel/api/clients/add", {
+					client: this.clientObject(protocol, c),
+					inboundIds: [inboundId],
+				}),
+			() =>
+				this.postJson("/panel/api/inbounds/addClient", {
+					id: inboundId,
+					settings: JSON.stringify({ clients: [this.clientObject(protocol, c, true)] }),
+				}),
+		])
+	}
+
+	async updateClient(inboundId: number, protocol: InboundProtocol, c: ProvisionClientInput): Promise<void> {
+		const key = encodeURIComponent(this.clientKey(protocol, c.uuid, c.ssMethod))
+		await this.attempt([
+			() =>
+				this.postJson(`/panel/api/clients/update/${encodeURIComponent(c.email)}`, {
+					client: this.clientObject(protocol, c),
+					inboundIds: [inboundId],
+				}),
+			() =>
+				this.postJson(`/panel/api/inbounds/updateClient/${key}`, {
+					id: inboundId,
+					settings: JSON.stringify({ clients: [this.clientObject(protocol, c, true)] }),
+				}),
+		])
+	}
+
+	async deleteClient(
+		inboundId: number,
+		protocol: InboundProtocol,
+		c: { uuid: string; email: string; ssMethod?: string },
+	): Promise<void> {
+		const key = encodeURIComponent(this.clientKey(protocol, c.uuid, c.ssMethod))
+		await this.attempt([
+			() => this.call(`/panel/api/clients/del/${encodeURIComponent(c.email)}`, { method: "POST" }),
+			() => this.call(`/panel/api/inbounds/${inboundId}/delClient/${key}`, { method: "POST" }),
+		])
+	}
+
+	async resetClientTraffic(inboundId: number, email: string): Promise<void> {
+		await this.attempt([
+			() => this.call(`/panel/api/clients/resetTraffic/${encodeURIComponent(email)}`, { method: "POST" }),
+			() => this.call(`/panel/api/inbounds/${inboundId}/resetClientTraffic/${encodeURIComponent(email)}`, { method: "POST" }),
+		])
+	}
+
+	async getOnlineEmails(): Promise<string[]> {
+		const list = await this.attempt<string[] | null>([
+			() => this.call<string[] | null>("/panel/api/clients/onlines", { method: "POST" }),
+			() => this.call<string[] | null>("/panel/api/inbounds/onlines", { method: "POST" }),
+		])
+		return Array.isArray(list) ? list.map(String) : []
+	}
+
+	/** Every share URL of one client across the inbounds it is attached to (v3 only). */
+	async getClientLinks(email: string): Promise<string[]> {
+		try {
+			const list = await this.call<string[] | null>(`/panel/api/clients/links/${encodeURIComponent(email)}`, {
+				method: "GET",
+			})
+			return Array.isArray(list) ? list.map(String) : []
+		} catch (err) {
+			if (err instanceof MissingEndpointError) return []
+			throw err
+		}
+	}
+
+	async getSubLinks(subId: string): Promise<string[]> {
+		try {
+			const list = await this.call<string[] | null>(`/panel/api/clients/subLinks/${encodeURIComponent(subId)}`, {
+				method: "GET",
+			})
+			return Array.isArray(list) ? list.map(String) : []
+		} catch (err) {
+			if (err instanceof MissingEndpointError) return []
+			throw err
+		}
+	}
+}
