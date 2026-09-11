@@ -4,9 +4,15 @@ import { z } from "zod"
 
 export const serverSchema = z.object({
 	name: z.string().min(1).max(64),
-	baseUrl: z.string().url().max(512),
-	username: z.string().min(1).max(128),
+	/** origin + webBasePath of the panel; normalized server-side */
+	baseUrl: z.string().min(3).max(512),
+	authMode: z.enum(["password", "token"]).optional(),
+	username: z.string().max(128).optional(),
 	password: z.string().min(1).max(256).optional(),
+	/** 3X-UI v3: Settings -> Security -> API Token (admin scope) */
+	apiToken: z.string().min(8).max(512).optional(),
+	totpSecret: z.string().max(128).nullable().optional(),
+	insecureTls: z.boolean().optional(),
 	publicHost: z.string().max(253).nullable().optional(),
 	subBaseUrl: z.string().max(512).nullable().optional(),
 	weight: z.number().int().min(0).max(1000).optional(),

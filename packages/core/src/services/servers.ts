@@ -1,13 +1,26 @@
 import { prisma, type Admin, type Server } from "@srpanel/db"
 import { decryptSecret, encryptSecret } from "../crypto/secretbox"
-import { XuiAdapter } from "../panels/xui"
-import type { PanelClientStat, PanelInbound, PanelServerStatus } from "../panels/types"
+import { XuiAdapter, normalizePanelBaseUrl } from "../panels/xui"
+import type { PanelAuthMode, PanelCapabilities, PanelClientStat, PanelInbound, PanelInboundOption, PanelServerStatus } from "../panels/types"
 import type { StoredInbound } from "../subscription/links"
-import { NotFoundError, PanelAuthError } from "../util/errors"
+import { AppError, NotFoundError, PanelAuthError } from "../util/errors"
 import { onClientStatusChanged } from "./notifications"
 
-export function adapterFor(server: Pick<Server, "baseUrl" | "username" | "passwordEnc">): XuiAdapter {
-	return new XuiAdapter({ baseUrl: server.baseUrl, username: server.username, password: decryptSecret(server.passwordEnc) })
+type ServerAuthFields = Pick<
+	Server,
+	"baseUrl" | "username" | "passwordEnc" | "authMode" | "apiTokenEnc" | "totpSecretEnc" | "insecureTls"
+>
+
+export function adapterFor(server: ServerAuthFields): XuiAdapter {
+	return new XuiAdapter({
+		baseUrl: server.baseUrl,
+		authMode: server.authMode === "TOKEN" ? "token" : "password",
+		username: server.username || undefined,
+		password: server.passwordEnc ? decryptSecret(server.passwordEnc) : undefined,
+		apiToken: server.apiTokenEnc ? decryptSecret(server.apiTokenEnc) : undefined,
+		totpSecret: server.totpSecretEnc ? decryptSecret(server.totpSecretEnc) : undefined,
+		insecureTls: server.insecureTls,
+	})
 }
 
 export function publicHostOf(server: Pick<Server, "baseUrl" | "publicHost">): string {
@@ -23,21 +36,41 @@ export function inboundsOf(server: Pick<Server, "inboundsJson">): StoredInbound[
 	return Array.isArray(server.inboundsJson) ? (server.inboundsJson as unknown as StoredInbound[]) : []
 }
 
-export async function testConnection(conn: { baseUrl: string; username: string; password: string }): Promise<{
+export interface PanelConnInput {
+	baseUrl: string
+	authMode?: PanelAuthMode
+	username?: string
+	password?: string
+	apiToken?: string
+	totpSecret?: string
+	twoFactorCode?: string
+	insecureTls?: boolean
+}
+
+/** Probes a panel before it is saved: auth, version, capabilities and the inbound picker list. */
+export async function testConnection(conn: PanelConnInput): Promise<{
+	ok: true
+	baseUrl: string
 	status: PanelServerStatus
-	inbounds: Array<Pick<PanelInbound, "id" | "remark" | "protocol" | "port" | "enable">>
+	capabilities: PanelCapabilities
+	inbounds: PanelInboundOption[]
 }> {
 	const adapter = new XuiAdapter(conn)
 	await adapter.login()
-	const [status, inbounds] = await Promise.all([adapter.getStatus(), adapter.listInbounds()])
-	return { status, inbounds: inbounds.map((i) => ({ id: i.id, remark: i.remark, protocol: i.protocol, port: i.port, enable: i.enable })) }
+	const capabilities = await adapter.probe()
+	const [status, inbounds] = await Promise.all([adapter.getStatus(), adapter.listInboundOptions()])
+	return { ok: true, baseUrl: adapter.baseUrl, status, capabilities, inbounds }
 }
 
 export interface ServerInput {
 	name: string
 	baseUrl: string
-	username: string
+	authMode?: PanelAuthMode
+	username?: string
 	password?: string
+	apiToken?: string
+	totpSecret?: string | null
+	insecureTls?: boolean
 	publicHost?: string | null
 	subBaseUrl?: string | null
 	weight?: number
@@ -45,13 +78,22 @@ export interface ServerInput {
 }
 
 export async function createServer(input: ServerInput): Promise<Server> {
-	if (!input.password) throw new NotFoundError("رمز عبور پنل لازم است")
+	const authMode: PanelAuthMode = input.authMode ?? (input.apiToken ? "token" : "password")
+	const baseUrl = normalizePanelBaseUrl(input.baseUrl)
+	if (!baseUrl) throw new AppError("آدرس پنل نامعتبر است")
+	if (authMode === "token" && !input.apiToken) throw new AppError("توکن API پنل لازم است")
+	if (authMode === "password" && (!input.username || !input.password))
+		throw new AppError("نام کاربری و رمز عبور پنل لازم است")
 	const server = await prisma.server.create({
 		data: {
 			name: input.name.trim(),
-			baseUrl: input.baseUrl.trim().replace(/\/+$/, ""),
-			username: input.username.trim(),
-			passwordEnc: encryptSecret(input.password),
+			baseUrl,
+			authMode: authMode === "token" ? "TOKEN" : "PASSWORD",
+			username: input.username?.trim() || "",
+			passwordEnc: input.password ? encryptSecret(input.password) : "",
+			apiTokenEnc: input.apiToken ? encryptSecret(input.apiToken) : null,
+			totpSecretEnc: input.totpSecret ? encryptSecret(input.totpSecret.trim()) : null,
+			insecureTls: input.insecureTls ?? false,
 			publicHost: input.publicHost?.trim() || null,
 			subBaseUrl: input.subBaseUrl?.trim() || null,
 			weight: input.weight ?? 100,
@@ -65,14 +107,25 @@ export async function createServer(input: ServerInput): Promise<Server> {
 export async function updateServer(id: string, input: Partial<ServerInput>): Promise<Server> {
 	const data: Record<string, unknown> = {}
 	if (input.name !== undefined) data.name = input.name.trim()
-	if (input.baseUrl !== undefined) data.baseUrl = input.baseUrl.trim().replace(/\/+$/, "")
-	if (input.username !== undefined) data.username = input.username.trim()
+	if (input.baseUrl !== undefined) {
+		const baseUrl = normalizePanelBaseUrl(input.baseUrl)
+		if (!baseUrl) throw new AppError("آدرس پنل نامعتبر است")
+		data.baseUrl = baseUrl
+	}
+	if (input.authMode !== undefined) data.authMode = input.authMode === "token" ? "TOKEN" : "PASSWORD"
+	if (input.username !== undefined) data.username = input.username?.trim() || ""
 	if (input.password) data.passwordEnc = encryptSecret(input.password)
+	if (input.apiToken) data.apiTokenEnc = encryptSecret(input.apiToken)
+	if (input.totpSecret !== undefined)
+		data.totpSecretEnc = input.totpSecret ? encryptSecret(input.totpSecret.trim()) : null
+	if (input.insecureTls !== undefined) data.insecureTls = input.insecureTls
 	if (input.publicHost !== undefined) data.publicHost = input.publicHost?.trim() || null
 	if (input.subBaseUrl !== undefined) data.subBaseUrl = input.subBaseUrl?.trim() || null
 	if (input.weight !== undefined) data.weight = input.weight
 	if (input.isActive !== undefined) data.isActive = input.isActive
-	return prisma.server.update({ where: { id }, data })
+	const server = await prisma.server.update({ where: { id }, data })
+	void syncServer(server.id).catch(() => undefined)
+	return server
 }
 
 /** Full sync of one server: status + inbounds + per-client usage + online list. */
@@ -84,6 +137,7 @@ export async function syncServer(serverId: string): Promise<{ ok: boolean; inbou
 		const adapter = adapterFor(server)
 		await adapter.login()
 		const latencyMs = Date.now() - startedAt
+		const capabilities = await adapter.probe().catch(() => null)
 		const status = await adapter.getStatus()
 		const inbounds = await adapter.listInbounds()
 		const onlines = await adapter.getOnlineEmails().catch(() => [] as string[])
@@ -98,6 +152,8 @@ export async function syncServer(serverId: string): Promise<{ ok: boolean; inbou
 					statusJson: status as any,
 					inboundsJson: stored as any,
 					inboundsSyncAt: new Date(),
+					panelVersion: capabilities?.panelVersion ?? status.panelVersion ?? null,
+					capsJson: (capabilities ?? undefined) as any,
 				},
 			}),
 			prisma.serverMetric.create({

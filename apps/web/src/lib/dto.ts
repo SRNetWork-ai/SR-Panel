@@ -36,6 +36,12 @@ export interface ServerDto {
 	name: string
 	baseUrl: string
 	username: string
+	authMode: "password" | "token"
+	hasApiToken: boolean
+	hasTotp: boolean
+	insecureTls: boolean
+	panelVersion: string | null
+	caps: { clientsApi: boolean; inboundOptions: boolean; bearerAuth: boolean; twoFactor: boolean } | null
 	publicHost: string | null
 	subBaseUrl: string | null
 	weight: number
@@ -117,6 +123,12 @@ export function toServerDto(s: Server & { clientCount?: number }): ServerDto {
 		name: s.name,
 		baseUrl: s.baseUrl,
 		username: s.username,
+		authMode: s.authMode === "TOKEN" ? "token" : "password",
+		hasApiToken: Boolean(s.apiTokenEnc),
+		hasTotp: Boolean(s.totpSecretEnc),
+		insecureTls: Boolean(s.insecureTls),
+		panelVersion: s.panelVersion ?? null,
+		caps: (s.capsJson ?? null) as ServerDto["caps"],
 		publicHost: s.publicHost,
 		subBaseUrl: s.subBaseUrl,
 		weight: s.weight,
