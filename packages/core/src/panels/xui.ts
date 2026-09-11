@@ -1,15 +1,42 @@
+import { createHash } from "node:crypto"
+import { totpCode } from "../security/totp"
 import { PanelAuthError, PanelError } from "../util/errors"
 import type {
 	InboundProtocol,
 	PanelAdapter,
+	PanelCapabilities,
 	PanelClientStat,
 	PanelConnection,
 	PanelInbound,
+	PanelInboundOption,
 	PanelServerStatus,
 	ProvisionClientInput,
 } from "./types"
 
 type XuiResponse<T> = { success: boolean; msg?: string; obj?: T }
+
+/** Raised when a route is missing on this panel build, so the caller can fall back to the legacy one. */
+class MissingEndpointError extends PanelError {
+	constructor(path: string) {
+		super(`endpoint not available: ${path}`)
+		this.name = "MissingEndpointError"
+	}
+}
+
+/**
+ * Accepts anything an operator may paste (bare host, host:port, or a deep link inside the
+ * panel) and returns origin + webBasePath, which is what every /panel/api/* route hangs off.
+ */
+export function normalizePanelBaseUrl(input: string): string {
+	let url = String(input ?? "").trim()
+	if (!url) return ""
+	if (!/^https?:\/\//i.test(url)) url = "http://" + url
+	url = url.replace(/[?#].*$/, "").replace(/\/+$/, "")
+	url = url.replace(/\/panel\/api(\/.*)?$/i, "")
+	url = url.replace(/\/panel\/(inbounds|clients|settings|xray|nodes|hosts)(\/.*)?$/i, "")
+	url = url.replace(/\/(login|logout)$/i, "")
+	return url.replace(/\/+$/, "")
+}
 
 function parseJsonField(v: unknown): Record<string, any> {
 	if (!v) return {}
@@ -21,14 +48,65 @@ function parseJsonField(v: unknown): Record<string, any> {
 	}
 }
 
-/** 3x-ui (MHSanaei) adapter — uses the long-standing /panel/api/inbounds endpoints. */
+/**
+ * Node fetch has no per-request TLS switch, so panels with self-signed certificates are
+ * handled by flipping the process flag for the duration of the call (ref-counted).
+ */
+let insecureDepth = 0
+let insecurePrev: string | undefined
+async function withTls<T>(insecure: boolean | undefined, fn: () => Promise<T>): Promise<T> {
+	if (!insecure) return fn()
+	if (insecureDepth === 0) {
+		insecurePrev = process.env.NODE_TLS_REJECT_UNAUTHORIZED
+		process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0"
+	}
+	insecureDepth++
+	try {
+		return await fn()
+	} finally {
+		insecureDepth--
+		if (insecureDepth === 0) {
+			if (insecurePrev === undefined) delete process.env.NODE_TLS_REJECT_UNAUTHORIZED
+			else process.env.NODE_TLS_REJECT_UNAUTHORIZED = insecurePrev
+		}
+	}
+}
+
+/** Shadowsocks 2022 needs a PSK sized to the cipher; legacy ciphers accept any string. */
+export function shadowsocksPassword(method: string, seed: string): string {
+	const m = (method ?? "").toLowerCase()
+	if (m.includes("2022")) {
+		const bytes = m.includes("aes-128") ? 16 : 32
+		return createHash("sha256").update(seed).digest().subarray(0, bytes).toString("base64")
+	}
+	return seed.replace(/-/g, "")
+}
+
+/**
+ * 3X-UI adapter (MHSanaei). Speaks the v3 API - Bearer API tokens, first-class
+ * /panel/api/clients/* endpoints and /panel/api/inbounds/options - and transparently
+ * falls back to the legacy /panel/api/inbounds/* routes on older 2.x builds.
+ */
 export class XuiAdapter implements PanelAdapter {
 	private cookie: string | null = null
+	private csrf: string | null = null
+	private caps: PanelCapabilities | null = null
+	readonly baseUrl: string
+	private readonly timeoutMs: number
 
-	constructor(private readonly conn: PanelConnection, private readonly timeoutMs = 15_000) {}
+	constructor(private readonly conn: PanelConnection, timeoutMs?: number) {
+		this.baseUrl = normalizePanelBaseUrl(conn.baseUrl)
+		this.timeoutMs = timeoutMs ?? conn.timeoutMs ?? 15_000
+	}
+
+	/** Bearer mode short-circuits the login + CSRF dance entirely. */
+	private get usesToken(): boolean {
+		const mode = this.conn.authMode ?? (this.conn.apiToken ? "token" : "password")
+		return mode === "token" && Boolean(this.conn.apiToken)
+	}
 
 	private url(path: string): string {
-		return this.conn.baseUrl.replace(/\/+$/, "") + path
+		return this.baseUrl + path
 	}
 
 	private async raw(path: string, init: RequestInit = {}): Promise<Response> {
@@ -38,8 +116,13 @@ export class XuiAdapter implements PanelAdapter {
 			const headers = new Headers(init.headers)
 			headers.set("Accept", "application/json, text/plain, */*")
 			headers.set("X-Requested-With", "XMLHttpRequest")
-			if (this.cookie) headers.set("Cookie", this.cookie)
-			return await fetch(this.url(path), { ...init, headers, signal: ctrl.signal, redirect: "manual" })
+			if (this.usesToken) headers.set("Authorization", `Bearer ${this.conn.apiToken}`)
+			else if (this.cookie) headers.set("Cookie", this.cookie)
+			const method = String(init.method ?? "GET").toUpperCase()
+			if (this.csrf && method !== "GET") headers.set("X-CSRF-Token", this.csrf)
+			return await withTls(this.conn.insecureTls, () =>
+				fetch(this.url(path), { ...init, headers, signal: ctrl.signal, redirect: "manual" }),
+			)
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err)
 			throw new PanelError(`اتصال به پنل برقرار نشد: ${msg}`)
@@ -48,8 +131,32 @@ export class XuiAdapter implements PanelAdapter {
 		}
 	}
 
+	/** A stored TOTP secret lets us answer the panel 2FA prompt without a human. */
+	private twoFactor(): string | undefined {
+		if (this.conn.twoFactorCode) return this.conn.twoFactorCode.trim()
+		if (this.conn.totpSecret) {
+			try {
+				return totpCode(this.conn.totpSecret)
+			} catch {
+				return undefined
+			}
+		}
+		return undefined
+	}
+
 	async login(): Promise<void> {
-		const body = new URLSearchParams({ username: this.conn.username, password: this.conn.password })
+		if (this.usesToken) {
+			this.cookie = null
+			return
+		}
+		const username = (this.conn.username ?? "").trim()
+		if (!username || !this.conn.password) throw new PanelAuthError("نام کاربری یا رمز عبور پنل تنظیم نشده است")
+		const body = new URLSearchParams({ username, password: this.conn.password })
+		const code = this.twoFactor()
+		if (code) {
+			body.set("twoFactorCode", code)
+			body.set("loginSecret", code)
+		}
 		const res = await this.raw("/login", {
 			method: "POST",
 			body,
@@ -64,18 +171,39 @@ export class XuiAdapter implements PanelAdapter {
 		const pairs = setCookies.map((c) => c.split(";")[0]!.trim()).filter(Boolean)
 		if (!pairs.length) throw new PanelAuthError("پنل کوکی سشن برنگرداند")
 		this.cookie = pairs.join("; ")
+		await this.loadCsrf()
+	}
+
+	/** v3 browser sessions replay a CSRF token on unsafe requests; older builds have no such route. */
+	private async loadCsrf(): Promise<void> {
+		try {
+			const res = await this.raw("/csrf-token", { method: "GET" })
+			if (!res.ok) return
+			const json = (await res.json().catch(() => null)) as any
+			const token = typeof json?.obj === "string" ? json.obj : (json?.obj?.token ?? json?.token)
+			if (token) this.csrf = String(token)
+		} catch {
+			/* pre-v3 panel */
+		}
 	}
 
 	private async call<T>(path: string, init: RequestInit = {}, retry = true): Promise<T> {
-		if (!this.cookie) await this.login()
+		if (!this.usesToken && !this.cookie) await this.login()
 		const res = await this.raw(path, init)
+		if (res.status === 404 || res.status === 405) throw new MissingEndpointError(path)
 		const contentType = res.headers.get("content-type") ?? ""
-		if ((res.status >= 300 && res.status < 400) || res.status === 401 || !contentType.includes("json")) {
-			if (retry) {
+		const unauthorized = res.status === 401 || res.status === 403
+		if ((res.status >= 300 && res.status < 400) || unauthorized || !contentType.includes("json")) {
+			if (retry && !this.usesToken) {
 				this.cookie = null
+				this.csrf = null
 				await this.login()
 				return this.call<T>(path, init, false)
 			}
+			if (unauthorized)
+				throw new PanelAuthError(
+					this.usesToken ? "توکن API پنل نامعتبر است یا دسترسی کافی ندارد" : "نشست پنل معتبر نیست",
+				)
 			throw new PanelError(`پاسخ غیرمنتظره از پنل (${res.status}) در ${path}`)
 		}
 		const json = (await res.json()) as XuiResponse<T>
@@ -91,13 +219,67 @@ export class XuiAdapter implements PanelAdapter {
 		})
 	}
 
-	async getStatus(): Promise<PanelServerStatus> {
-		let s: any
-		try {
-			s = await this.call<any>("/panel/api/server/status", { method: "POST" })
-		} catch {
-			s = await this.call<any>("/server/status", { method: "POST" })
+	/** Runs the v3 route first and falls back to the legacy one when it is absent. */
+	private async attempt<T>(steps: Array<() => Promise<T>>): Promise<T> {
+		let last: unknown
+		for (const step of steps) {
+			try {
+				return await step()
+			} catch (err) {
+				if (!(err instanceof MissingEndpointError)) throw err
+				last = err
+			}
 		}
+		throw last instanceof Error ? last : new PanelError("این نسخه از پنل، این عملیات را پشتیبانی نمی‌کند")
+	}
+
+	/** Detects what this panel build supports; cached for the lifetime of the adapter. */
+	async probe(): Promise<PanelCapabilities> {
+		if (this.caps) return this.caps
+		if (!this.usesToken && !this.cookie) await this.login()
+		let inboundOptions = false
+		let clientsApi = false
+		try {
+			await this.call<any[]>("/panel/api/inbounds/options", { method: "GET" })
+			inboundOptions = true
+		} catch (err) {
+			if (!(err instanceof MissingEndpointError)) throw err
+		}
+		try {
+			await this.call<any>("/panel/api/clients/groups", { method: "GET" })
+			clientsApi = true
+		} catch (err) {
+			if (!(err instanceof MissingEndpointError)) throw err
+		}
+		const status = await this.getStatus().catch(() => null)
+		this.caps = {
+			clientsApi,
+			inboundOptions,
+			bearerAuth: this.usesToken,
+			twoFactor: await this.twoFactorEnabled(),
+			panelVersion: status?.panelVersion,
+			xrayVersion: status?.xrayVersion,
+		}
+		return this.caps
+	}
+
+	private async twoFactorEnabled(): Promise<boolean> {
+		try {
+			const r = await this.call<any>("/getTwoFactorEnable", { method: "POST" })
+			if (typeof r === "boolean") return r
+			return Boolean(r?.twoFactorEnable ?? r?.enable ?? false)
+		} catch {
+			return false
+		}
+	}
+
+	async getStatus(): Promise<PanelServerStatus> {
+		const s = await this.attempt<any>([
+			() => this.call<any>("/panel/api/server/status", { method: "GET" }),
+			() => this.call<any>("/panel/api/server/status", { method: "POST" }),
+			() => this.call<any>("/server/status", { method: "POST" }),
+		])
+		const version = s?.appVersion ?? s?.version ?? s?.panelVersion
 		return {
 			cpu: Number(s?.cpu ?? 0),
 			memUsed: Number(s?.mem?.current ?? 0),
@@ -114,6 +296,7 @@ export class XuiAdapter implements PanelAdapter {
 			publicIp: s?.publicIP?.ipv4 ? String(s.publicIP.ipv4) : undefined,
 			tcpCount: Number(s?.tcpCount ?? 0),
 			udpCount: Number(s?.udpCount ?? 0),
+			panelVersion: version ? String(version) : undefined,
 		}
 	}
 
@@ -133,6 +316,7 @@ export class XuiAdapter implements PanelAdapter {
 			expiryTime: Number(ib.expiryTime ?? 0),
 			settings: parseJsonField(ib.settings),
 			streamSettings: parseJsonField(ib.streamSettings),
+			nodeId: ib.nodeId != null ? Number(ib.nodeId) : undefined,
 			clientStats: Array.isArray(ib.clientStats)
 				? ib.clientStats.map(
 						(c: any): PanelClientStat => ({
@@ -144,13 +328,53 @@ export class XuiAdapter implements PanelAdapter {
 							enable: Boolean(c.enable),
 							inboundId: Number(c.inboundId ?? ib.id),
 							reset: Number(c.reset ?? 0),
+							lastOnline: c.lastOnline != null ? Number(c.lastOnline) : undefined,
 						}),
 					)
 				: [],
 		}))
 	}
 
-	/** Build the per-protocol client object 3x-ui expects inside `settings.clients[]`. */
+	/** Picker projection used by the "add panel" flow - cheap even on panels with 10k clients. */
+	async listInboundOptions(): Promise<PanelInboundOption[]> {
+		try {
+			const list = (await this.call<any[]>("/panel/api/inbounds/options", { method: "GET" })) ?? []
+			return list.map((o) => ({
+				id: Number(o.id),
+				remark: String(o.remark ?? ""),
+				tag: String(o.tag ?? ""),
+				protocol: String(o.protocol ?? "vless") as InboundProtocol,
+				port: Number(o.port ?? 0),
+				listen: o.listen ? String(o.listen) : undefined,
+				enable: o.enable !== false,
+				tlsFlowCapable: Boolean(o.tlsFlowCapable),
+				ssMethod: String(o.ssMethod ?? ""),
+				nodeId: o.nodeId != null ? Number(o.nodeId) : undefined,
+				nodeAddress: o.nodeAddress ? String(o.nodeAddress) : undefined,
+				shareAddr: o.shareAddr ? String(o.shareAddr) : undefined,
+			}))
+		} catch (err) {
+			if (!(err instanceof MissingEndpointError)) throw err
+			return (await this.listInbounds()).map((i) => {
+				const network = String(i.streamSettings?.network ?? "tcp")
+				const security = String(i.streamSettings?.security ?? "none")
+				return {
+					id: i.id,
+					remark: i.remark,
+					tag: i.tag,
+					protocol: i.protocol,
+					port: i.port,
+					listen: i.listen || undefined,
+					enable: i.enable,
+					tlsFlowCapable:
+						i.protocol === "vless" && network === "tcp" && (security === "tls" || security === "reality"),
+					ssMethod: i.protocol === "shadowsocks" ? String(i.settings?.method ?? "") : "",
+				}
+			})
+		}
+	}
+
+	/** The per-protocol client row shared by the v3 clients API and the legacy settings blob. */
 	private clientObject(protocol: InboundProtocol, c: ProvisionClientInput): Record<string, unknown> {
 		const base = {
 			email: c.email,
@@ -161,7 +385,9 @@ export class XuiAdapter implements PanelAdapter {
 			tgId: c.tgId ?? "",
 			subId: c.subId,
 			reset: 0,
-			comment: "",
+			comment: c.comment ?? "",
+			group: c.group ?? "",
+			limitHwid: c.limitHwid ?? 0,
 		}
 		switch (protocol) {
 			case "vmess":
@@ -169,44 +395,97 @@ export class XuiAdapter implements PanelAdapter {
 			case "trojan":
 				return { password: c.uuid, flow: "", ...base }
 			case "shadowsocks":
-				return { method: "", password: c.uuid.replace(/-/g, ""), ...base }
+				return { method: c.ssMethod ?? "", password: shadowsocksPassword(c.ssMethod ?? "", c.uuid), ...base }
 			case "vless":
 			default:
 				return { id: c.uuid, flow: c.flow ?? "", ...base }
 		}
 	}
 
-	/** The path key 3x-ui uses to address a client: uuid for vless/vmess, password for trojan/ss. */
-	private clientKey(protocol: InboundProtocol, uuid: string): string {
-		return protocol === "shadowsocks" ? uuid.replace(/-/g, "") : uuid
+	/** Legacy routes address a client by its secret: uuid for vless/vmess, password for trojan/ss. */
+	private clientKey(protocol: InboundProtocol, uuid: string, ssMethod?: string): string {
+		if (protocol === "shadowsocks") return shadowsocksPassword(ssMethod ?? "", uuid)
+		return uuid
 	}
 
 	async addClient(inboundId: number, protocol: InboundProtocol, c: ProvisionClientInput): Promise<void> {
-		await this.postJson("/panel/api/inbounds/addClient", {
-			id: inboundId,
-			settings: JSON.stringify({ clients: [this.clientObject(protocol, c)] }),
-		})
+		const client = this.clientObject(protocol, c)
+		await this.attempt([
+			() => this.postJson("/panel/api/clients/add", { client, inboundIds: [inboundId] }),
+			() =>
+				this.postJson("/panel/api/inbounds/addClient", {
+					id: inboundId,
+					settings: JSON.stringify({ clients: [client] }),
+				}),
+		])
 	}
 
 	async updateClient(inboundId: number, protocol: InboundProtocol, c: ProvisionClientInput): Promise<void> {
-		await this.postJson(`/panel/api/inbounds/updateClient/${encodeURIComponent(this.clientKey(protocol, c.uuid))}`, {
-			id: inboundId,
-			settings: JSON.stringify({ clients: [this.clientObject(protocol, c)] }),
-		})
+		const client = this.clientObject(protocol, c)
+		const key = encodeURIComponent(this.clientKey(protocol, c.uuid, c.ssMethod))
+		await this.attempt([
+			() =>
+				this.postJson(`/panel/api/clients/update/${encodeURIComponent(c.email)}`, {
+					client,
+					inboundIds: [inboundId],
+				}),
+			() =>
+				this.postJson(`/panel/api/inbounds/updateClient/${key}`, {
+					id: inboundId,
+					settings: JSON.stringify({ clients: [client] }),
+				}),
+		])
 	}
 
-	async deleteClient(inboundId: number, protocol: InboundProtocol, c: { uuid: string; email: string }): Promise<void> {
-		await this.call(`/panel/api/inbounds/${inboundId}/delClient/${encodeURIComponent(this.clientKey(protocol, c.uuid))}`, {
-			method: "POST",
-		})
+	async deleteClient(
+		inboundId: number,
+		protocol: InboundProtocol,
+		c: { uuid: string; email: string; ssMethod?: string },
+	): Promise<void> {
+		const key = encodeURIComponent(this.clientKey(protocol, c.uuid, c.ssMethod))
+		await this.attempt([
+			() => this.call(`/panel/api/clients/del/${encodeURIComponent(c.email)}`, { method: "POST" }),
+			() => this.call(`/panel/api/inbounds/${inboundId}/delClient/${key}`, { method: "POST" }),
+		])
 	}
 
 	async resetClientTraffic(inboundId: number, email: string): Promise<void> {
-		await this.call(`/panel/api/inbounds/${inboundId}/resetClientTraffic/${encodeURIComponent(email)}`, { method: "POST" })
+		await this.attempt([
+			() => this.call(`/panel/api/clients/resetTraffic/${encodeURIComponent(email)}`, { method: "POST" }),
+			() => this.call(`/panel/api/inbounds/${inboundId}/resetClientTraffic/${encodeURIComponent(email)}`, { method: "POST" }),
+		])
 	}
 
 	async getOnlineEmails(): Promise<string[]> {
-		const list = await this.call<string[] | null>("/panel/api/inbounds/onlines", { method: "POST" })
+		const list = await this.attempt<string[] | null>([
+			() => this.call<string[] | null>("/panel/api/clients/onlines", { method: "POST" }),
+			() => this.call<string[] | null>("/panel/api/inbounds/onlines", { method: "POST" }),
+		])
 		return Array.isArray(list) ? list.map(String) : []
+	}
+
+	/** Every share URL of one client across the inbounds it is attached to (v3 only). */
+	async getClientLinks(email: string): Promise<string[]> {
+		try {
+			const list = await this.call<string[] | null>(`/panel/api/clients/links/${encodeURIComponent(email)}`, {
+				method: "GET",
+			})
+			return Array.isArray(list) ? list.map(String) : []
+		} catch (err) {
+			if (err instanceof MissingEndpointError) return []
+			throw err
+		}
+	}
+
+	async getSubLinks(subId: string): Promise<string[]> {
+		try {
+			const list = await this.call<string[] | null>(`/panel/api/clients/subLinks/${encodeURIComponent(subId)}`, {
+				method: "GET",
+			})
+			return Array.isArray(list) ? list.map(String) : []
+		} catch (err) {
+			if (err instanceof MissingEndpointError) return []
+			throw err
+		}
 	}
 }
