@@ -1,6 +1,6 @@
 import { prisma } from "@srpanel/db"
 import { buildLinks, userInfoHeader, type StoredInbound } from "../subscription/links"
-import { inboundsOf, publicHostOf } from "./servers"
+import { inboundsOf, publicHostOf, serverHostContextOf } from "./servers"
 
 export interface SubscriptionPayload {
 	client: {
@@ -46,7 +46,9 @@ export async function buildSubscription(subToken: string): Promise<SubscriptionP
 			const inbound = inboundsOf(link.server).find((i: StoredInbound) => i.id === link.inboundId)
 			if (!inbound || !inbound.enable) continue
 			const remark = `${link.server.name} • ${inbound.remark || inbound.protocol}`
-			for (const uri of buildLinks(inbound, { uuid: client.uuid, email: link.remoteEmail }, { host: publicHostOf(link.server), remark })) {
+			// `server` lets buildLinks prefer the address configured on the inbound over the panel domain
+			const opts = { host: publicHostOf(link.server), remark, server: serverHostContextOf(link.server) }
+			for (const uri of buildLinks(inbound, { uuid: client.uuid, email: link.remoteEmail }, opts)) {
 				links.push({ server: link.server.name, remark, uri })
 			}
 		}

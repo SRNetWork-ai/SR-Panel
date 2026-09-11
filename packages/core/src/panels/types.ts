@@ -34,6 +34,10 @@ export interface PanelInbound {
 	clientStats: PanelClientStat[]
 	/** Remote node that hosts this inbound (v3 multi-node panels) */
 	nodeId?: number
+	/** Address of the node hosting this inbound - merged in from /inbounds/options */
+	nodeAddress?: string
+	/** Address the panel itself puts into share links for this inbound (wins over the panel domain) */
+	shareAddr?: string
 }
 
 /** Lightweight picker projection returned by GET /panel/api/inbounds/options (3X-UI v3). */
