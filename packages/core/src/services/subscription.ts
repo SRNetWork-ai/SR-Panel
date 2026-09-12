@@ -1,5 +1,6 @@
 import { prisma } from "@srpanel/db"
 import { buildLinks, userInfoHeader, type StoredInbound } from "../subscription/links"
+import { configLabel } from "../util/naming"
 import { inboundsOf, publicHostOf, serverHostContextOf } from "./servers"
 
 export interface SubscriptionPayload {
@@ -41,11 +42,18 @@ export async function buildSubscription(subToken: string): Promise<SubscriptionP
 	const active = client.status === "ACTIVE"
 	const links: SubscriptionPayload["links"] = []
 	if (active) {
+		// every config carries the typed name (prefixed with the client tag); the
+		// server / inbound is only appended when it is needed to tell them apart
+		const label = configLabel(client)
+		const serverCount = new Set(client.servers.map((s) => s.serverId)).size
 		for (const link of client.servers) {
 			if (!link.server.isActive) continue
 			const inbound = inboundsOf(link.server).find((i: StoredInbound) => i.id === link.inboundId)
 			if (!inbound || !inbound.enable) continue
-			const remark = `${link.server.name} • ${inbound.remark || inbound.protocol}`
+			const parts = [label]
+			if (serverCount > 1) parts.push(link.server.name)
+			if (client.servers.filter((s) => s.serverId === link.serverId).length > 1) parts.push(inbound.remark || inbound.protocol)
+			const remark = parts.join(" • ")
 			// `server` lets buildLinks prefer the address configured on the inbound over the panel domain
 			const opts = { host: publicHostOf(link.server), remark, server: serverHostContextOf(link.server) }
 			for (const uri of buildLinks(inbound, { uuid: client.uuid, email: link.remoteEmail }, opts)) {
