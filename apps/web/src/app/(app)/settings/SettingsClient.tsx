@@ -1,7 +1,7 @@
 "use client"
 
 import { useState } from "react"
-import { Palette, Settings2, ShieldCheck, Sparkles, Stethoscope, UserCircle2 } from "lucide-react"
+import { Clock, Palette, Settings2, ShieldCheck, Sparkles, Stethoscope, UserCircle2 } from "lucide-react"
 import type { AdminDto } from "@/lib/dto"
 import { useLocale, useT } from "@/lib/i18n"
 import { Badge, PageHeader } from "@/components/ui"
@@ -10,6 +10,7 @@ import { AccountTab } from "./AccountTab"
 import { AppearanceTab } from "./AppearanceTab"
 import { BrandTab } from "./BrandTab"
 import { SecurityTab } from "./SecurityTab"
+import { SessionTab } from "./SessionTab"
 import { SystemTab } from "./SystemTab"
 import { ToolsTab } from "./ToolsTab"
 import { tr, type Brand, type SystemInfo, type Tab } from "./types"
@@ -28,6 +29,7 @@ export function SettingsClient({ me, brand: initialBrand, info }: { me: AdminDto
 	const tabs: Array<TabItem<Tab>> = [
 		{ id: "account", label: t("set_account"), icon: UserCircle2 },
 		{ id: "security", label: L("امنیت", "Security"), icon: ShieldCheck, badge: totpOn ? "2FA" : undefined },
+		{ id: "session", label: L("نشست و قفل خودکار", "Session & lock"), icon: Clock },
 		{ id: "brand", label: t("set_brand"), icon: Palette },
 		{ id: "appearance", label: t("set_appearance"), icon: Sparkles },
 		{ id: "system", label: L("سیستم", "System"), icon: Settings2 },
@@ -38,7 +40,7 @@ export function SettingsClient({ me, brand: initialBrand, info }: { me: AdminDto
 		<div className="space-y-6 fade-up">
 			<PageHeader
 				title={t("set_title")}
-				subtitle={L("حساب، امنیت، برندینگ، ظاهر، سیستم و عیب‌یابی", "Account, security, branding, appearance, system and diagnostics")}
+				subtitle={L("حساب، امنیت، نشست، برندینگ، ظاهر، سیستم و عیب‌یابی", "Account, security, session, branding, appearance, system and diagnostics")}
 				actions={
 					<>
 						<Badge tone={isOwner ? "violet" : "cyan"}>{isOwner ? t("owner") : t("admin")}</Badge>
@@ -51,6 +53,7 @@ export function SettingsClient({ me, brand: initialBrand, info }: { me: AdminDto
 
 			{tab === "account" && <AccountTab me={me} brand={brand} totpOn={totpOn} />}
 			{tab === "security" && <SecurityTab me={me} totpOn={totpOn} onTotp={setTotpOn} />}
+			{tab === "session" && <SessionTab />}
 			{tab === "brand" && <BrandTab brand={brand} onChange={setBrand} />}
 			{tab === "appearance" && <AppearanceTab brand={brand} />}
 			{tab === "system" && <SystemTab me={me} info={info} />}
