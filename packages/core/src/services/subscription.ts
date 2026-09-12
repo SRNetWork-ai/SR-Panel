@@ -149,9 +149,9 @@ export async function buildSubscription(subToken: string): Promise<SubscriptionP
 		expire: client.expiresAt ? Math.floor(client.expiresAt.getTime() / 1000) : 0,
 	})
 
-	// custom domain (once verified) keeps every customer-facing link white-label
-	const customDomain = ownerBrand?.customDomain && ownerBrand.domainVerified ? `https://${ownerBrand.customDomain}` : null
-	const base = (customDomain ?? panelUrl()).replace(/\/+$/, "")
+	// a verified custom domain keeps every customer-facing link white-label
+	const domain = ownerBrand?.customDomain && ownerBrand.domainVerified ? ownerBrand.customDomain : null
+	const base = (domain ? `https://${domain}` : panelUrl()).replace(/\/+$/, "")
 	const store = client.admin.store
 
 	const byServer = new Map<string, SubServerInfo>()
