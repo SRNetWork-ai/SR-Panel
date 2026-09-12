@@ -33,8 +33,9 @@ export function configLabel(client: { name: string; tag?: string | null }): stri
 
 /**
  * 3x-ui keeps one subId per client row and refuses duplicates
- * (`Something went wrong (subId already in use: …)`), so a client that lives on
- * several inbounds of the same panel needs a different subId per inbound.
+ * (`Something went wrong (subId already in use: ...)`), so two configs living on the
+ * same panel must not share one. A client attached to several inbounds is a single
+ * config and therefore keyed by the first inbound of that group.
  * Derived - never stored - so create and update always agree.
  * `salt` is only used when the panel still reports a collision.
  */

@@ -49,6 +49,15 @@ function parseJsonField(v: unknown): Record<string, any> {
 }
 
 /**
+ * 3X-UI v3 attaches one client to several inbounds in a single call, so every client
+ * route accepts either a single inbound id or the whole list.
+ */
+function inboundIdList(input: number | number[]): number[] {
+	const ids = (Array.isArray(input) ? input : [input]).map(Number).filter((n) => Number.isFinite(n))
+	return [...new Set(ids)]
+}
+
+/**
  * Node fetch has no per-request TLS switch, so panels with self-signed certificates are
  * handled by flipping the process flag for the duration of the call (ref-counted).
  */
@@ -421,46 +430,67 @@ export class XuiAdapter implements PanelAdapter {
 		return uuid
 	}
 
-	async addClient(inboundId: number, protocol: InboundProtocol, c: ProvisionClientInput): Promise<void> {
-		await this.attempt([
-			() =>
-				this.postJson("/panel/api/clients/add", {
+	/**
+	 * Creates one client attached to every given inbound - that is what the panel's own
+	 * client editor does. Legacy builds only know one inbound per call and reject a
+	 * duplicate email, so a multi-inbound request fails loudly instead of half-creating.
+	 */
+	async addClient(inboundIds: number | number[], protocol: InboundProtocol, c: ProvisionClientInput): Promise<void> {
+		const ids = inboundIdList(inboundIds)
+		if (!ids.length) throw new PanelError("هیچ اینباندی برای ساخت کانفیگ انتخاب نشده است")
+		await this.attempt<void>([
+			async () => {
+				await this.postJson("/panel/api/clients/add", {
 					client: this.clientObject(protocol, c),
-					inboundIds: [inboundId],
-				}),
-			() =>
-				this.postJson("/panel/api/inbounds/addClient", {
-					id: inboundId,
+					inboundIds: ids,
+				})
+			},
+			async () => {
+				if (ids.length > 1) throw new PanelError("این نسخه از پنل، یک کلاینت روی چند اینباند را پشتیبانی نمی‌کند")
+				await this.postJson("/panel/api/inbounds/addClient", {
+					id: ids[0],
 					settings: JSON.stringify({ clients: [this.clientObject(protocol, c, true)] }),
-				}),
+				})
+			},
 		])
 	}
 
-	async updateClient(inboundId: number, protocol: InboundProtocol, c: ProvisionClientInput): Promise<void> {
+	/** The id list *is* the client's inbound membership: a partial list detaches the rest. */
+	async updateClient(inboundIds: number | number[], protocol: InboundProtocol, c: ProvisionClientInput): Promise<void> {
+		const ids = inboundIdList(inboundIds)
+		if (!ids.length) throw new PanelError("هیچ اینباندی برای به‌روزرسانی کانفیگ انتخاب نشده است")
 		const key = encodeURIComponent(this.clientKey(protocol, c.uuid, c.ssMethod))
-		await this.attempt([
-			() =>
-				this.postJson(`/panel/api/clients/update/${encodeURIComponent(c.email)}`, {
+		await this.attempt<void>([
+			async () => {
+				await this.postJson(`/panel/api/clients/update/${encodeURIComponent(c.email)}`, {
 					client: this.clientObject(protocol, c),
-					inboundIds: [inboundId],
-				}),
-			() =>
-				this.postJson(`/panel/api/inbounds/updateClient/${key}`, {
-					id: inboundId,
+					inboundIds: ids,
+				})
+			},
+			async () => {
+				if (ids.length > 1) throw new PanelError("این نسخه از پنل، یک کلاینت روی چند اینباند را پشتیبانی نمی‌کند")
+				await this.postJson(`/panel/api/inbounds/updateClient/${key}`, {
+					id: ids[0],
 					settings: JSON.stringify({ clients: [this.clientObject(protocol, c, true)] }),
-				}),
+				})
+			},
 		])
 	}
 
 	async deleteClient(
-		inboundId: number,
+		inboundIds: number | number[],
 		protocol: InboundProtocol,
 		c: { uuid: string; email: string; ssMethod?: string },
 	): Promise<void> {
+		const ids = inboundIdList(inboundIds)
 		const key = encodeURIComponent(this.clientKey(protocol, c.uuid, c.ssMethod))
-		await this.attempt([
-			() => this.call(`/panel/api/clients/del/${encodeURIComponent(c.email)}`, { method: "POST" }),
-			() => this.call(`/panel/api/inbounds/${inboundId}/delClient/${key}`, { method: "POST" }),
+		await this.attempt<void>([
+			async () => {
+				await this.call(`/panel/api/clients/del/${encodeURIComponent(c.email)}`, { method: "POST" })
+			},
+			async () => {
+				for (const id of ids) await this.call(`/panel/api/inbounds/${id}/delClient/${key}`, { method: "POST" })
+			},
 		])
 	}
 

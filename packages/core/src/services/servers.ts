@@ -224,8 +224,16 @@ export async function syncServer(serverId: string): Promise<{ ok: boolean; inbou
 }
 
 async function applyClientStats(serverId: string, inbounds: PanelInbound[], onlines: string[]): Promise<void> {
+	// xray keys its counters by email, so a client attached to several inbounds is
+	// reported once - under one of them. Any duplicated row therefore carries the same
+	// aggregate and the largest one is the truth.
 	const stats = new Map<string, PanelClientStat>()
-	for (const ib of inbounds) for (const s of ib.clientStats ?? []) stats.set(`${ib.id}:${s.email}`, s)
+	for (const ib of inbounds) {
+		for (const s of ib.clientStats ?? []) {
+			const prev = stats.get(s.email)
+			if (!prev || s.up + s.down > prev.up + prev.down) stats.set(s.email, { ...s, inboundId: s.inboundId || ib.id })
+		}
+	}
 	const links = await prisma.clientServer.findMany({ where: { serverId } })
 	if (!links.length) return
 	const now = new Date()
@@ -233,24 +241,44 @@ async function applyClientStats(serverId: string, inbounds: PanelInbound[], onli
 	const touched = new Set<string>()
 	const onlineClients = new Set<string>()
 	const usageRows: Array<{ clientId: string; up: bigint; down: bigint }> = []
+	// links that share an email are one remote client, so its usage is applied once
+	const groups = new Map<string, typeof links>()
 	for (const link of links) {
-		const s = stats.get(`${link.inboundId}:${link.remoteEmail}`)
+		const key = `${link.clientId}:${link.remoteEmail}`
+		const group = groups.get(key)
+		if (group) group.push(link)
+		else groups.set(key, [link])
+	}
+	for (const group of groups.values()) {
+		const sorted = [...group].sort((a, b) => a.inboundId - b.inboundId)
+		const email = sorted[0]!.remoteEmail
+		const ids = sorted.map((l) => l.id)
+		const s = stats.get(email)
 		if (!s) {
-			await prisma.clientServer.update({ where: { id: link.id }, data: { lastError: "روی پنل پیدا نشد", lastSyncAt: now } })
+			await prisma.clientServer.updateMany({ where: { id: { in: ids } }, data: { lastError: "روی پنل پیدا نشد", lastSyncAt: now } })
 			continue
 		}
+		// the inbound the panel reports against holds the usage; the rest only mirror the flag
+		const primary = sorted.find((l) => l.inboundId === s.inboundId) ?? sorted[0]!
 		const up = BigInt(Math.max(0, Math.round(s.up)))
 		const down = BigInt(Math.max(0, Math.round(s.down)))
 		// usage rows store deltas; a decrease means the counter was reset on the panel
-		const dUp = up >= link.up ? up - link.up : up
-		const dDown = down >= link.down ? down - link.down : down
-		if (dUp + dDown > 0n) usageRows.push({ clientId: link.clientId, up: dUp, down: dDown })
+		const dUp = up >= primary.up ? up - primary.up : up
+		const dDown = down >= primary.down ? down - primary.down : down
+		if (dUp + dDown > 0n) usageRows.push({ clientId: primary.clientId, up: dUp, down: dDown })
 		await prisma.clientServer.update({
-			where: { id: link.id },
+			where: { id: primary.id },
 			data: { up, down, enabled: s.enable, lastSyncAt: now, lastError: null },
 		})
-		touched.add(link.clientId)
-		if (online.has(link.remoteEmail)) onlineClients.add(link.clientId)
+		const mirrored = ids.filter((id) => id !== primary.id)
+		if (mirrored.length) {
+			await prisma.clientServer.updateMany({
+				where: { id: { in: mirrored } },
+				data: { up: 0n, down: 0n, enabled: s.enable, lastSyncAt: now, lastError: null },
+			})
+		}
+		touched.add(primary.clientId)
+		if (online.has(email)) onlineClients.add(primary.clientId)
 	}
 	if (usageRows.length) await prisma.clientUsage.createMany({ data: usageRows })
 	if (onlineClients.size) await prisma.client.updateMany({ where: { id: { in: [...onlineClients] } }, data: { lastOnlineAt: now } })

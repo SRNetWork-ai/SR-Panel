@@ -58,6 +58,22 @@ const clientInclude = {
 const COLLISION = /(in use|already|exists?|duplicate|تکرار|موجود)/i
 const PANEL_ATTEMPTS = 4
 
+/** One remote client: every inbound of a server that shares the same panel config. */
+interface PanelGroup {
+	server: Server
+	protocol: InboundProtocol
+	flow: string
+	inboundIds: number[]
+}
+
+/** An already-provisioned remote client, i.e. the stored links that share one email. */
+interface LinkGroup {
+	serverId: string
+	remoteEmail: string
+	inboundIds: number[]
+	linkIds: string[]
+}
+
 export function isOwner(actor: Pick<Admin, "role">): boolean {
 	return actor.role === "OWNER"
 }
@@ -88,6 +104,48 @@ function normalizeTargets(list: ClientTarget[]): ClientTarget[] {
 	return out.sort((a, b) => (a.serverId === b.serverId ? a.inboundId - b.inboundId : a.serverId < b.serverId ? -1 : 1))
 }
 
+/**
+ * Turns the picked inbounds into remote clients.
+ *
+ * 3X-UI attaches a single client to many inbounds (that is what its own client editor
+ * does), so one config is created per server - not per inbound. The client row itself
+ * is protocol- and flow-shaped though, so inbounds needing a different shape (a VLESS
+ * vision inbound next to a plain one) still become a second config on that panel.
+ */
+function groupTargets(targets: ClientTarget[], servers: Server[], uuid: string): PanelGroup[] {
+	const groups = new Map<string, PanelGroup>()
+	for (const t of targets) {
+		const server = servers.find((s) => s.id === t.serverId)
+		if (!server) continue
+		const inbound = inboundsOf(server).find((i) => i.id === t.inboundId)
+		const protocol = inbound?.protocol ?? "vless"
+		const flow = inbound ? resolveFlow(inbound, uuid) : ""
+		const key = `${server.id}|${protocol}|${flow}`
+		const group = groups.get(key)
+		if (group) group.inboundIds.push(t.inboundId)
+		else groups.set(key, { server, protocol, flow, inboundIds: [t.inboundId] })
+	}
+	const out = [...groups.values()]
+	for (const group of out) group.inboundIds.sort((a, b) => a - b)
+	return out
+}
+
+/** Groups stored links by the identity the panel uses: one email per server = one client. */
+function groupLinks(links: ClientWithServers["servers"]): LinkGroup[] {
+	const groups = new Map<string, LinkGroup>()
+	for (const link of [...links].sort((a, b) => a.inboundId - b.inboundId)) {
+		const key = `${link.serverId}|${link.remoteEmail}`
+		const group = groups.get(key)
+		if (group) {
+			group.inboundIds.push(link.inboundId)
+			group.linkIds.push(link.id)
+		} else {
+			groups.set(key, { serverId: link.serverId, remoteEmail: link.remoteEmail, inboundIds: [link.inboundId], linkIds: [link.id] })
+		}
+	}
+	return [...groups.values()]
+}
+
 function provisionInput(client: Client, remoteEmail: string, flow: string, subId: string): ProvisionClientInput {
 	return {
 		uuid: client.uuid,
@@ -103,20 +161,20 @@ function provisionInput(client: Client, remoteEmail: string, flow: string, subId
 }
 
 /**
- * Adds one inbound of a client to its panel.
+ * Creates one remote client for a whole group of inbounds.
  *
- * 3x-ui rejects a client whose subId or email is already taken; the subId is
- * unique per inbound by construction, but two customers may well carry the same
- * name, so on a collision we retry with a fresh salt / a numeric suffix instead
- * of leaving the target unprovisioned.
+ * 3x-ui rejects a client whose subId or email is already taken; the subId is derived
+ * from the group, but two customers may well carry the same name, so on a collision we
+ * retry with a fresh salt / a numeric suffix instead of leaving the group unprovisioned.
  */
-async function addToPanel(server: Server, inboundId: number, protocol: InboundProtocol, client: Client, baseEmail: string, flow: string): Promise<string> {
+async function addToPanel(group: PanelGroup, client: Client, baseEmail: string): Promise<string> {
+	const { server, protocol, flow, inboundIds } = group
 	let email = baseEmail
 	let last: unknown
 	for (let attempt = 0; attempt < PANEL_ATTEMPTS; attempt++) {
-		const subId = remoteSubId(client.subToken, server.id, inboundId, attempt ? `r${attempt}` : "")
+		const subId = remoteSubId(client.subToken, server.id, inboundIds[0]!, attempt ? `r${attempt}` : "")
 		try {
-			await adapterFor(server).addClient(inboundId, protocol, provisionInput(client, email, flow, subId))
+			await adapterFor(server).addClient(inboundIds, protocol, provisionInput(client, email, flow, subId))
 			return email
 		} catch (err) {
 			last = err
@@ -131,6 +189,24 @@ async function addToPanel(server: Server, inboundId: number, protocol: InboundPr
 		}
 	}
 	throw last instanceof Error ? last : new AppError(`ساخت کانفیگ روی ${server.name} ناموفق بود`)
+}
+
+/** The email never changes on update, but the derived subId may still hit another client. */
+async function updateOnPanel(server: Server, group: LinkGroup, client: Client, protocol: InboundProtocol, flow: string): Promise<void> {
+	let last: unknown
+	for (let attempt = 0; attempt < PANEL_ATTEMPTS; attempt++) {
+		const subId = remoteSubId(client.subToken, server.id, group.inboundIds[0]!, attempt ? `r${attempt}` : "")
+		try {
+			await adapterFor(server).updateClient(group.inboundIds, protocol, provisionInput(client, group.remoteEmail, flow, subId))
+			return
+		} catch (err) {
+			last = err
+			const message = err instanceof Error ? err.message : String(err)
+			if (COLLISION.test(message) && /sub\s*id/i.test(message)) continue
+			throw err
+		}
+	}
+	throw last instanceof Error ? last : new AppError(`به‌روزرسانی کانفیگ روی ${server.name} ناموفق بود`)
 }
 
 async function assertQuota(admin: Admin, extraBytes: bigint, targets: ClientTarget[], excludeClientId?: string): Promise<void> {
@@ -192,51 +268,65 @@ export async function createClient(actor: Admin, input: CreateClientInput): Prom
 
 	// the name the operator typed (with the tag in front) is what the panel shows
 	const label = configLabel(client)
+	const groups = groupTargets(targets, servers, client.uuid)
 	const perServer = new Map<string, number>()
 	const errors: string[] = []
-	for (const t of targets) {
-		const server = servers.find((s) => s.id === t.serverId)!
-		const seen = perServer.get(t.serverId) ?? 0
-		perServer.set(t.serverId, seen + 1)
-		// one panel cannot hold the same email twice, so extra inbounds get -2, -3, …
+	for (const group of groups) {
+		const seen = perServer.get(group.server.id) ?? 0
+		perServer.set(group.server.id, seen + 1)
+		// one panel cannot hold the same email twice, so a second config on the same
+		// server (a different protocol/flow) gets -2, -3, …
 		const baseEmail = seen === 0 ? label : `${label}-${seen + 1}`
-		const inbound = inboundsOf(server).find((i) => i.id === t.inboundId)
-		const link = await prisma.clientServer.create({ data: { clientId: client.id, serverId: server.id, inboundId: t.inboundId, remoteEmail: baseEmail } })
+		const linkIds: string[] = []
+		for (const inboundId of group.inboundIds) {
+			const link = await prisma.clientServer.create({
+				data: { clientId: client.id, serverId: group.server.id, inboundId, remoteEmail: baseEmail },
+			})
+			linkIds.push(link.id)
+		}
 		try {
-			const flow = inbound ? resolveFlow(inbound, client.uuid) : ""
-			const remoteEmail = await addToPanel(server, t.inboundId, inbound?.protocol ?? "vless", client, baseEmail, flow)
-			if (remoteEmail !== baseEmail) await prisma.clientServer.update({ where: { id: link.id }, data: { remoteEmail } })
+			const remoteEmail = await addToPanel(group, client, baseEmail)
+			if (remoteEmail !== baseEmail) await prisma.clientServer.updateMany({ where: { id: { in: linkIds } }, data: { remoteEmail } })
 		} catch (err) {
 			const message = err instanceof Error ? err.message : String(err)
-			errors.push(`${server.name}: ${message}`)
-			await prisma.clientServer.update({ where: { id: link.id }, data: { lastError: message.slice(0, 300) } })
+			errors.push(`${group.server.name}: ${message}`)
+			await prisma.clientServer.updateMany({ where: { id: { in: linkIds } }, data: { lastError: message.slice(0, 300) } })
 		}
 	}
-	await audit(actor.id, "client.create", client.id, { name, tag, serviceId: input.serviceId ?? null, targets: targets.length, errors: errors.length })
+	await audit(actor.id, "client.create", client.id, {
+		name,
+		tag,
+		serviceId: input.serviceId ?? null,
+		targets: targets.length,
+		configs: groups.length,
+		errors: errors.length,
+	})
 	return { client: await getClientForActor(actor, client.id), errors }
 }
 
 /**
- * Pushes the current DB state of a client to every server it lives on.
- * The remote email is kept as created — renaming it on the panel would detach
- * the traffic counters that 3x-ui keys by email.
+ * Pushes the current DB state of a client to every panel it lives on.
+ *
+ * Links that share an email are one remote client attached to several inbounds, so they
+ * are updated in a single call - a partial inbound list would detach it from the rest.
+ * The remote email is kept as created: renaming it on the panel would detach the
+ * traffic counters that 3x-ui keys by email.
  */
 export async function pushClient(client: ClientWithServers): Promise<string[]> {
 	const errors: string[] = []
-	const servers = await prisma.server.findMany({ where: { id: { in: client.servers.map((s) => s.serverId) } } })
-	for (const link of client.servers) {
-		const server = servers.find((s) => s.id === link.serverId)
+	const servers = await prisma.server.findMany({ where: { id: { in: [...new Set(client.servers.map((s) => s.serverId))] } } })
+	for (const group of groupLinks(client.servers)) {
+		const server = servers.find((s) => s.id === group.serverId)
 		if (!server) continue
-		const inbound = inboundsOf(server).find((i) => i.id === link.inboundId)
+		const inbound = inboundsOf(server).find((i) => i.id === group.inboundIds[0])
 		try {
 			const flow = inbound ? resolveFlow(inbound, client.uuid) : ""
-			const subId = remoteSubId(client.subToken, link.serverId, link.inboundId)
-			await adapterFor(server).updateClient(link.inboundId, inbound?.protocol ?? "vless", provisionInput(client, link.remoteEmail, flow, subId))
-			await prisma.clientServer.update({ where: { id: link.id }, data: { lastError: null } })
+			await updateOnPanel(server, group, client, inbound?.protocol ?? "vless", flow)
+			await prisma.clientServer.updateMany({ where: { id: { in: group.linkIds } }, data: { lastError: null } })
 		} catch (err) {
 			const message = err instanceof Error ? err.message : String(err)
 			errors.push(`${server.name}: ${message}`)
-			await prisma.clientServer.update({ where: { id: link.id }, data: { lastError: message.slice(0, 300) } })
+			await prisma.clientServer.updateMany({ where: { id: { in: group.linkIds } }, data: { lastError: message.slice(0, 300) } })
 		}
 	}
 	return errors
@@ -286,14 +376,14 @@ export async function updateClient(actor: Admin, id: string, input: UpdateClient
 
 export async function resetClientTraffic(actor: Admin, id: string): Promise<string[]> {
 	const client = await getClientForActor(actor, id)
-	const servers = await prisma.server.findMany({ where: { id: { in: client.servers.map((s) => s.serverId) } } })
+	const servers = await prisma.server.findMany({ where: { id: { in: [...new Set(client.servers.map((s) => s.serverId))] } } })
 	const errors: string[] = []
-	for (const link of client.servers) {
-		const server = servers.find((s) => s.id === link.serverId)
+	for (const group of groupLinks(client.servers)) {
+		const server = servers.find((s) => s.id === group.serverId)
 		if (!server) continue
 		try {
-			await adapterFor(server).resetClientTraffic(link.inboundId, link.remoteEmail)
-			await prisma.clientServer.update({ where: { id: link.id }, data: { up: 0n, down: 0n, lastError: null } })
+			await adapterFor(server).resetClientTraffic(group.inboundIds[0]!, group.remoteEmail)
+			await prisma.clientServer.updateMany({ where: { id: { in: group.linkIds } }, data: { up: 0n, down: 0n, lastError: null } })
 		} catch (err) {
 			errors.push(`${server.name}: ${err instanceof Error ? err.message : String(err)}`)
 		}
@@ -306,14 +396,14 @@ export async function resetClientTraffic(actor: Admin, id: string): Promise<stri
 
 export async function deleteClient(actor: Admin, id: string): Promise<string[]> {
 	const client = await getClientForActor(actor, id)
-	const servers = await prisma.server.findMany({ where: { id: { in: client.servers.map((s) => s.serverId) } } })
+	const servers = await prisma.server.findMany({ where: { id: { in: [...new Set(client.servers.map((s) => s.serverId))] } } })
 	const errors: string[] = []
-	for (const link of client.servers) {
-		const server = servers.find((s) => s.id === link.serverId)
+	for (const group of groupLinks(client.servers)) {
+		const server = servers.find((s) => s.id === group.serverId)
 		if (!server) continue
-		const inbound = inboundsOf(server).find((i) => i.id === link.inboundId)
+		const inbound = inboundsOf(server).find((i) => i.id === group.inboundIds[0])
 		try {
-			await adapterFor(server).deleteClient(link.inboundId, inbound?.protocol ?? "vless", { uuid: client.uuid, email: link.remoteEmail })
+			await adapterFor(server).deleteClient(group.inboundIds, inbound?.protocol ?? "vless", { uuid: client.uuid, email: group.remoteEmail })
 		} catch (err) {
 			const message = err instanceof Error ? err.message : String(err)
 			if (!/not found|پیدا نشد/i.test(message)) errors.push(`${server.name}: ${message}`)

@@ -3,7 +3,7 @@
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { useEffect, useMemo, useState, type FormEvent } from "react"
-import { Copy, Layers, Pencil, Plus, QrCode, RotateCcw, Search, Trash2, UserPlus } from "lucide-react"
+import { Copy, Layers, Pencil, Plus, QrCode, RotateCcw, Search, Settings2, Trash2, UserPlus } from "lucide-react"
 import { ApiError, api, copyText } from "@/lib/client"
 import type { ClientDto, ServerDto, ServiceDto } from "@/lib/dto"
 import { daysLeft, formatBytes, percent, relativeTime } from "@/lib/format"
@@ -25,6 +25,16 @@ function labelPreview(name: string, tag: string): string {
 	return /[-_.|:/\u2022]$/.test(g) ? `${g}${n}` : `${g}-${n}`
 }
 
+/** Mirrors groupTargets() in @srpanel/core: one panel client per server+protocol, however many inbounds are picked. */
+function configCount(targets: Array<{ serverId: string; inboundId: number }>, servers: ServerDto[]): number {
+	const keys = new Set<string>()
+	for (const t of targets) {
+		const proto = servers.find((s) => s.id === t.serverId)?.inbounds.find((i) => i.id === t.inboundId)?.protocol ?? ""
+		keys.add(`${t.serverId}|${proto}`)
+	}
+	return keys.size
+}
+
 export function ClientsClient({ initial, servers, services, openNew, isOwner }: { initial: { items: ClientDto[]; total: number }; servers: ServerDto[]; services: ServiceDto[]; openNew: boolean; isOwner: boolean }) {
 	const t = useT()
 	const locale = useLocale()
@@ -40,7 +50,7 @@ export function ClientsClient({ initial, servers, services, openNew, isOwner }: 
 	const [loading, setLoading] = useState(false)
 	const hasServices = services.length > 0
 	const firstTargets = () => servers.flatMap((s) => s.inbounds.filter((i) => i.enable).slice(0, 1).map((i) => ({ serverId: s.id, inboundId: i.id }))).slice(0, 1)
-	/* services are the friendly path: preselect the first one when any exists */
+	/* services are the only path once the owner defined at least one */
 	const newForm = (): Form => (hasServices ? { ...emptyForm, mode: "service", serviceId: services[0].id } : { ...emptyForm, mode: "manual", targets: firstTargets() })
 	const [modal, setModal] = useState<"new" | ClientDto | null>(openNew ? "new" : null)
 	const [form, setForm] = useState<Form>(() => (openNew ? newForm() : emptyForm))
@@ -97,6 +107,9 @@ export function ClientsClient({ initial, servers, services, openNew, isOwner }: 
 	const selectedService = services.find((s) => s.id === form.serviceId) ?? null
 	const showManualPicker = !creating || !serviceMode
 	const incomplete = creating && (serviceMode ? !form.serviceId : form.targets.length === 0)
+	/* one config per server (per protocol) - several inbounds of one server land on a single panel client */
+	const manualConfigs = useMemo(() => configCount(form.targets, servers), [form.targets, servers])
+	const serviceConfigs = selectedService ? new Set(selectedService.targets.map((x) => x.serverId)).size : 0
 
 	const submit = async (e: FormEvent) => {
 		e.preventDefault()
@@ -276,10 +289,10 @@ export function ClientsClient({ initial, servers, services, openNew, isOwner }: 
 							<Field label={creating ? t("cl_days") : t("cl_extend_days")}><Input type="number" min={creating ? 0 : -3650} value={form.days} onChange={(e) => set("days", Number(e.target.value))} /></Field>
 						</div>
 						<div className="flex flex-wrap gap-1.5">
-							{[10, 30, 50, 100, 200].map((g) => <button key={g} type="button" className={cx("badge cursor-pointer", form.trafficGB === g ? "badge-violet" : "badge-muted")} onClick={() => set("trafficGB", g)}>{g} GB</button>)}
-							<button type="button" className={cx("badge cursor-pointer", form.trafficGB === 0 ? "badge-violet" : "badge-muted")} onClick={() => set("trafficGB", 0)}>∞</button>
+							{[10, 30, 50, 100, 200].map((g) => <button key={g} type="button" className={cx("chip", form.trafficGB === g && "chip-on")} onClick={() => set("trafficGB", g)}>{g} GB</button>)}
+							<button type="button" className={cx("chip", form.trafficGB === 0 && "chip-on")} onClick={() => set("trafficGB", 0)}>∞</button>
 							<span className="mx-1 opacity-30">|</span>
-							{[30, 60, 90, 180].map((d) => <button key={d} type="button" className={cx("badge cursor-pointer", form.days === d ? "badge-cyan" : "badge-muted")} onClick={() => set("days", d)}>{d} {t("day_short")}</button>)}
+							{[30, 60, 90, 180].map((d) => <button key={d} type="button" className={cx("chip", form.days === d && "chip-on")} onClick={() => set("days", d)}>{d} {t("day_short")}</button>)}
 						</div>
 						<div className="grid grid-cols-2 gap-3">
 							<Field label={t("cl_ip_limit")}><Input type="number" min={0} value={form.ipLimit} onChange={(e) => set("ipLimit", Number(e.target.value))} /></Field>
@@ -296,29 +309,42 @@ export function ClientsClient({ initial, servers, services, openNew, isOwner }: 
 									<Layers className="h-3.5 w-3.5 text-violet-soft" />
 									{L("سرویس", "Service")}
 								</div>
-								<p className="mb-2 text-[11px] text-muted">{L("سرویس مجموعه‌ای از اینباندهاست که مالک تعریف کرده؛ کافی‌ست همین را انتخاب کنید.", "A service is an owner-defined bundle of inbounds - just pick one.")}</p>
-								<Select value={form.serviceId} onChange={(e) => set("serviceId", e.target.value)} disabled={!creating || !serviceMode}>
-									<option value="">{L("— انتخاب سرویس —", "- pick a service -")}</option>
-									{services.map((s) => (
-										<option key={s.id} value={s.id}>{s.name}</option>
-									))}
-								</Select>
+								<p className="mb-2 text-[11px] text-muted">{L("سرویس مجموعه‌ای از اینباندهاست که مالک تعریف کرده؛ کافی‌ست یکی را انتخاب کنید.", "A service is an owner-defined bundle of inbounds - just pick one.")}</p>
+								<div className="scrollbar-thin max-h-72 space-y-2 overflow-y-auto pe-1">
+									{services.map((svc) => {
+										const on = form.serviceId === svc.id
+										const cfgs = new Set(svc.targets.map((x) => x.serverId)).size
+										return (
+											<button key={svc.id} type="button" disabled={!creating} onClick={() => set("serviceId", svc.id)} className={cx("pick", on && "pick-on", !creating && "cursor-default")}>
+												<div className="flex items-center justify-between gap-2">
+													<span className="flex min-w-0 items-center gap-2 text-sm font-medium">
+														<span className={cx("h-3.5 w-3.5 shrink-0 rounded-full border-2", on ? "border-violet-soft bg-violet" : "border-line")} />
+														<span className="truncate">{svc.name}</span>
+													</span>
+													<Badge tone={on ? "violet" : "muted"}>{cfgs} {L("کانفیگ", "configs")}</Badge>
+												</div>
+												{svc.description && <p className="mt-1 text-[11px] text-muted">{svc.description}</p>}
+												<div className="mt-1.5 flex flex-wrap gap-1">
+													{svc.targets.slice(0, 6).map((x) => (
+														<span key={x.serverId + ":" + x.inboundId} className="badge badge-muted max-w-full">
+															<span className="truncate">{x.serverName}</span>
+															<span className="mono truncate opacity-70" dir="ltr">{x.inboundLabel}</span>
+														</span>
+													))}
+													{svc.targets.length > 6 && <span className="badge badge-muted num">+{svc.targets.length - 6}</span>}
+												</div>
+											</button>
+										)
+									})}
+								</div>
 								{selectedService && (
-									<div className="mt-2 space-y-1">
-										{selectedService.description && <p className="text-[11px] text-muted">{selectedService.description}</p>}
-										{selectedService.targets.map((x) => (
-											<div key={x.serverId + ":" + x.inboundId} className="flex items-center justify-between gap-2 text-[11px]">
-												<span className="truncate text-muted">{x.serverName}</span>
-												<span className="mono truncate" dir="ltr">{x.inboundLabel}</span>
-											</div>
-										))}
-										<p className="pt-1 text-[11px] text-muted">{selectedService.targets.length + " " + L("کانفیگ ساخته می‌شود", "configs will be created")}</p>
-									</div>
+									<p className="pt-2 text-[11px] text-muted">{L(`${serviceConfigs} کانفیگ از ${selectedService.targets.length} اینباند ساخته می‌شود — اینباندهای یک سرور داخل یک کانفیگ جمع می‌شوند.`, `${serviceConfigs} config(s) from ${selectedService.targets.length} inbounds - inbounds of the same server share one config.`)}</p>
 								)}
 								{creating && isOwner && (
-									<button type="button" className="mt-3 text-[11px] text-violet-soft hover:underline" onClick={() => set("mode", serviceMode ? "manual" : "service")}>
-										{serviceMode ? L("انتخاب دستی اینباندها", "Pick inbounds manually") : L("انتخاب از روی سرویس", "Use a service instead")}
-									</button>
+									<Link href="/services" className="mt-2 inline-flex items-center gap-1 text-[11px] text-violet-soft hover:underline">
+										<Settings2 className="h-3.5 w-3.5" />
+										{L("مدیریت سرویس‌ها", "Manage services")}
+									</Link>
 								)}
 							</div>
 						)}
@@ -327,11 +353,14 @@ export function ClientsClient({ initial, servers, services, openNew, isOwner }: 
 							<>
 								<div className="label">{t("cl_targets")}</div>
 								<p className="mb-2 text-[11px] text-muted">{t("cl_targets_hint")}</p>
+								{creating && form.targets.length > 0 && (
+									<p className="mb-2 text-[11px] text-muted">{L(`${manualConfigs} کانفیگ از ${form.targets.length} اینباند ساخته می‌شود — چند اینباند از یک سرور روی یک کانفیگ می‌نشیند.`, `${manualConfigs} config(s) from ${form.targets.length} inbounds - several inbounds of one server share a single config.`)}</p>
+								)}
 								{!creating && <p className="mb-2 text-[11px] text-warning">{t("cl_servers")}: {form.targets.map((x) => serverMap.get(x.serverId)?.name ?? x.serverId).join(", ") || "—"}</p>}
 								<div className="scrollbar-thin max-h-80 space-y-2 overflow-y-auto pe-1">
 									{servers.length === 0 && <p className="text-xs text-muted">{t("srv_empty")}</p>}
 									{servers.map((s) => (
-										<div key={s.id} className="glass glass-2 p-3">
+										<div key={s.id} className="tile">
 											<div className="mb-2 flex items-center justify-between">
 												<span className="text-sm font-medium">{s.name}</span>
 												<StatusBadge status={s.status} />
@@ -341,7 +370,7 @@ export function ClientsClient({ initial, servers, services, openNew, isOwner }: 
 												{s.inbounds.map((i) => {
 													const on = form.targets.some((x) => x.serverId === s.id && x.inboundId === i.id)
 													return (
-														<button key={i.id} type="button" disabled={!creating || !i.enable} onClick={() => toggleTarget(s.id, i.id)} className={cx("badge cursor-pointer disabled:cursor-default disabled:opacity-60", on ? "badge-violet" : "badge-muted")}>
+														<button key={i.id} type="button" disabled={!creating || !i.enable} onClick={() => toggleTarget(s.id, i.id)} className={cx("chip", on && "chip-on")}>
 															{i.protocol}:{i.port}{i.remark ? ` • ${i.remark}` : ""}{i.security !== "none" ? ` • ${i.security}` : ""}
 														</button>
 													)
