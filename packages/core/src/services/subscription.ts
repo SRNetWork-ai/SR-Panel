@@ -151,7 +151,7 @@ export async function buildSubscription(subToken: string): Promise<SubscriptionP
 
 	// a verified custom domain keeps every customer-facing link white-label
 	const domain = ownerBrand?.customDomain && ownerBrand.domainVerified ? ownerBrand.customDomain : null
-	const base = (domain ? `https://${domain}` : panelUrl()).replace(/\/+$/, "")
+	const base = (domain ? "https://" + domain : panelUrl()).replace(/\/+$/, "")
 	const store = client.admin.store
 
 	const byServer = new Map<string, SubServerInfo>()
@@ -192,9 +192,9 @@ export async function buildSubscription(subToken: string): Promise<SubscriptionP
 			dailyAvgBytes: last7.length ? Math.round(last7Bytes / last7.length) : 0,
 			last7Bytes,
 		},
-		subUrl: `${base}/sub/${subToken}`,
-		pageUrl: `${base}/s/${subToken}`,
-		renewUrl: store?.enabled && store.slug ? `${base}/shop/${store.slug}?renew=${subToken}` : null,
+		subUrl: base + "/sub/" + subToken,
+		pageUrl: base + "/s/" + subToken,
+		renewUrl: store?.enabled && store.slug ? base + "/shop/" + store.slug + "?renew=" + subToken : null,
 		userInfo,
 		base64: Buffer.from(body, "utf8").toString("base64"),
 	}
