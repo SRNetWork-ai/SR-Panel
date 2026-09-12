@@ -87,6 +87,6 @@ export const GET = route<{ token: string }>(async (req, ctx) => {
 	const adminId = await adminByDepositToken(token)
 	if (!adminId) return ok({ ok: false, message: "توکن نامعتبر است" }, { status: 404 })
 	const sp = req.nextUrl.searchParams
-	if (!sp.size) return ok({ ok: true, message: "وب‌هوک واریز فعال است" })
+	if (Array.from(sp.keys()).length === 0) return ok({ ok: true, message: "وب‌هوک واریز فعال است" })
 	return handle(adminId, fromParams(sp))
 })
