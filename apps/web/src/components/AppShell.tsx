@@ -3,7 +3,7 @@
 import Link from "next/link"
 import { usePathname, useRouter } from "next/navigation"
 import { useEffect, useState, type ReactNode } from "react"
-import { Activity, ArrowDownToLine, DatabaseBackup, Globe2, LayoutDashboard, LogOut, Menu, MoreHorizontal, Moon, Plug, ScrollText, Server, Settings, ShieldCheck, ShoppingCart, Store, Sun, Users, Wallet, X } from "lucide-react"
+import { Activity, ArrowDownToLine, DatabaseBackup, Globe2, Layers, LayoutDashboard, LogOut, Menu, MoreHorizontal, Moon, Plug, ScrollText, Server, Settings, ShieldCheck, ShoppingCart, Store, Sun, Users, Wallet, X } from "lucide-react"
 import { api } from "@/lib/client"
 import { useLocale, useT } from "@/lib/i18n"
 import type { DictKey } from "@/lib/dict"
@@ -42,6 +42,7 @@ const GROUPS: NavGroup[] = [
 		label: ["زیرساخت", "Infrastructure"],
 		items: [
 			{ href: "/servers", key: "nav_servers", icon: Server },
+			{ href: "/services", label: ["سرویس\u200cها", "Services"], short: ["سرویس", "Service"], icon: Layers, owner: true },
 			{ href: "/monitoring", key: "nav_monitoring", icon: Activity, owner: true },
 		],
 	},
