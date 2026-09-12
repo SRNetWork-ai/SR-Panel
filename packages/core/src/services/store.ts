@@ -1,14 +1,20 @@
-import { prisma, type Admin, type Brand, type Order, type Payment, type PaymentMethod, type Plan, type StoreSettings } from "@srpanel/db"
+import { prisma, type Admin, type Brand, type Order, type Payment, type PaymentMethod, type Plan, type Server, type StoreSettings } from "@srpanel/db"
 import { randomToken } from "../security/token"
-import { AppError, ForbiddenError, NotFoundError } from "../util/errors"
+import { AppError, NotFoundError } from "../util/errors"
 import { audit } from "./audit"
+import { cardAutoSettings, rematchDeposits, uniqueCardAmount } from "./cardAuto"
 import { subscriptionUrl } from "./clients"
+import { effectiveUsdtRate } from "./fx"
 import { notify } from "./notifications"
 import { beginPayment, fulfillOrder, paymentNext, type PaymentNext, type PlanSnapshot } from "./payments"
-import { applyDiscount, planTargets } from "./plans"
+import { applyDiscount, planServiceId, planTargets, planTargetsFresh } from "./plans"
 import { brandName, panelUrl } from "./settings"
+import { cleanStorePage, storePage, type StorePage } from "./storePage"
 import { enabledMethods, storeUrlFor } from "./storeSettings"
 import { emitEvent } from "./webhooks"
+
+/** Admin-side order lists & dashboard live in ./storeAdmin; re-exported so existing imports keep working. */
+export { listOrders, orderForActor, storeOverview } from "./storeAdmin"
 
 export interface StoreContext {
 	settings: StoreSettings
@@ -26,6 +32,13 @@ export interface PublicPlan {
 	ipLimit: number
 	price: string
 	oldPrice: string | null
+	/** informational extras for the storefront cards */
+	sold: number
+	serviceName: string | null
+	servers: number
+	locations: string[]
+	pricePerDay: number | null
+	priceUsdt: string | null
 }
 
 export interface PublicBrand {
@@ -50,10 +63,22 @@ export interface PublicStore {
 	requireTelegram: boolean
 	requirePhone: boolean
 	usdtRate: number
+	paymentTtlMin: number
+	/** where the quoted USDT rate comes from */
+	fx: { auto: boolean; source: string; at: string | null; stale: boolean }
+	/** card-to-card orders are confirmed automatically */
+	cardAutoVerify: boolean
+	page: StorePage
+	stats: { plans: number; locations: number; sold: number }
 	plans: PublicPlan[]
 }
 
-const toPublicPlan = (p: Plan): PublicPlan => ({ id: p.id, name: p.name, description: p.description, badge: p.badge, trafficGB: p.trafficGB, days: p.days, ipLimit: p.ipLimit, price: p.price.toString(), oldPrice: p.oldPrice?.toString() ?? null })
+function usdtOf(price: bigint, rate: number): string | null {
+	if (rate <= 0) return null
+	const v = Number(price) / rate
+	if (!Number.isFinite(v) || v <= 0) return null
+	return (Math.ceil(v * 100) / 100).toFixed(2)
+}
 
 export function publicBrand(brand: Brand | null, fallbackTitle?: string | null): PublicBrand {
 	return {
@@ -86,8 +111,47 @@ export async function getStoreByHost(host: string | null | undefined): Promise<S
 	return ctxOf(s)
 }
 
+/**
+ * Everything the public storefront renders. The USDT rate is resolved through
+ * ./fx, so an automatic (multi-source) rate is always fresh here, and the
+ * editable page content comes from ./storePage.
+ */
 export async function publicStorePayload(ctx: StoreContext): Promise<PublicStore> {
-	const plans = await prisma.plan.findMany({ where: { adminId: ctx.admin.id, isActive: true }, orderBy: [{ sortOrder: "asc" }, { price: "asc" }] })
+	const [plans, page, fx, card] = await Promise.all([
+		prisma.plan.findMany({ where: { adminId: ctx.admin.id, isActive: true }, orderBy: [{ sortOrder: "asc" }, { price: "asc" }] }),
+		storePage(ctx.admin.id),
+		effectiveUsdtRate(ctx.admin.id, ctx.settings.usdtRate),
+		cardAutoSettings(ctx.admin.id),
+	])
+	const serviceIds = [...new Set(plans.map((p) => planServiceId(p)).filter((x): x is string => !!x))]
+	const serverIds = [...new Set(plans.flatMap((p) => planTargets(p).map((t) => t.serverId)))]
+	const [services, servers] = await Promise.all([
+		serviceIds.length ? prisma.service.findMany({ where: { id: { in: serviceIds } }, select: { id: true, name: true } }) : Promise.resolve([] as Array<{ id: string; name: string }>),
+		serverIds.length ? prisma.server.findMany({ where: { id: { in: serverIds } }, select: { id: true, name: true } }) : Promise.resolve([] as Array<{ id: string; name: string }>),
+	])
+	const rate = fx.rate
+	const publicPlans: PublicPlan[] = plans.map((p) => {
+		const targets = planTargets(p)
+		const ids = [...new Set(targets.map((t) => t.serverId))]
+		const serviceId = planServiceId(p)
+		return {
+			id: p.id,
+			name: p.name,
+			description: p.description,
+			badge: p.badge,
+			trafficGB: p.trafficGB,
+			days: p.days,
+			ipLimit: p.ipLimit,
+			price: p.price.toString(),
+			oldPrice: p.oldPrice?.toString() ?? null,
+			sold: p.sold,
+			serviceName: serviceId ? (services.find((s) => s.id === serviceId)?.name ?? null) : null,
+			servers: ids.length,
+			locations: ids.map((id) => servers.find((s) => s.id === id)?.name).filter((x): x is string => !!x),
+			pricePerDay: p.days > 0 ? Math.round(Number(p.price) / p.days) : null,
+			priceUsdt: page.showUsdtPrice ? usdtOf(p.price, rate) : null,
+		}
+	})
 	return {
 		slug: ctx.settings.slug,
 		title: ctx.settings.title || ctx.brand?.name || brandName(),
@@ -96,11 +160,17 @@ export async function publicStorePayload(ctx: StoreContext): Promise<PublicStore
 		supportUrl: ctx.settings.supportUrl || ctx.brand?.supportUrl || null,
 		currency: ctx.settings.currency,
 		brand: publicBrand(ctx.brand, ctx.settings.title),
-		methods: enabledMethods(ctx.settings),
+		// the mirrored rate may lag one request behind, so quote the fresh one
+		methods: enabledMethods({ ...ctx.settings, usdtRate: rate }),
 		requireTelegram: ctx.settings.requireTelegram,
 		requirePhone: ctx.settings.requirePhone,
-		usdtRate: ctx.settings.usdtRate,
-		plans: plans.map(toPublicPlan),
+		usdtRate: rate,
+		paymentTtlMin: ctx.settings.paymentTtlMin,
+		fx: { auto: fx.auto, source: fx.source, at: fx.at, stale: fx.stale },
+		cardAutoVerify: card.mode !== "MANUAL" && card.autoConfirm,
+		page: cleanStorePage(page),
+		stats: { plans: publicPlans.length, locations: new Set(publicPlans.flatMap((p) => p.locations)).size, sold: plans.reduce((sum, p) => sum + p.sold, 0) },
+		plans: publicPlans,
 	}
 }
 
@@ -154,8 +224,16 @@ export async function createOrder(slug: string, input: CreateOrderInput): Promis
 	}
 	const d = await applyDiscount(seller.id, input.discountCode, plan.price)
 	if (d.error) throw new AppError(d.error)
-	const amount = plan.price - d.discount
-	const snapshot: PlanSnapshot = { name: plan.name, trafficGB: plan.trafficGB, days: plan.days, ipLimit: plan.ipLimit, targets: planTargets(plan) }
+	let amount = plan.price - d.discount
+	// card-to-card auto verification matches deposits by amount, so every open
+	// invoice gets its own (slightly different) amount
+	if (input.method === "CARD" && amount > 0n) {
+		const unique = await uniqueCardAmount(seller.id, Number(amount))
+		if (Number.isFinite(unique) && unique > Number(amount)) amount = BigInt(unique)
+	}
+	// the service behind the plan may have gained/lost inbounds since it was created
+	const targets = await planTargetsFresh(plan)
+	const snapshot: PlanSnapshot = { name: plan.name, trafficGB: plan.trafficGB, days: plan.days, ipLimit: plan.ipLimit, targets }
 	const order = await prisma.order.create({
 		data: {
 			token: randomToken(16),
@@ -185,6 +263,8 @@ export async function createOrder(slug: string, input: CreateOrderInput): Promis
 	}
 	const { payment, next } = await beginPayment(s, { kind: "ORDER", method: input.method, amount, adminId: seller.id, orderId: order.id, description: `${ctx.brand?.name || brandName()} — ${plan.name}`, mobile: phone, email })
 	await notify("order.new", `🛍 <b>سفارش جدید</b>\nپلن: ${plan.name}\nمبلغ: <b>${Number(amount).toLocaleString("en-US")}</b> تومان — روش: ${input.method}\nمشتری: ${name || telegramId || phone || "-"}`, { dedupeKey: `order:${order.id}:new`, targetId: order.id, recipients: { adminId: seller.id } })
+	// a deposit SMS may already have arrived before the buyer pressed "paid"
+	if (input.method === "CARD") await rematchDeposits(seller.id).catch(() => undefined)
 	return { order, payment, next, token: order.token }
 }
 
@@ -200,6 +280,8 @@ export interface PublicOrder {
 	customer: { name: string | null; telegramId: string | null; phone: string | null }
 	payment: { id: string; method: PaymentMethod; status: Payment["status"]; amountUsdt: string | null; txid: string | null; receiptRef: string | null; error: string | null; reviewNote: string | null } | null
 	next: PaymentNext
+	/** card-to-card deposits of this seller are confirmed automatically */
+	autoVerify: boolean
 	client: { name: string; subUrl: string; pageUrl: string; expiresAt: string | null; trafficGB: number } | null
 	store: { slug: string; title: string; brand: PublicBrand; supportUrl: string | null; url: string }
 	error: string | null
@@ -211,6 +293,7 @@ export async function publicOrder(token: string): Promise<PublicOrder | null> {
 	const p = o.payments[0] ?? null
 	const s = o.admin.store
 	const snap = o.planSnapshot as unknown as PlanSnapshot
+	const card = p?.method === "CARD" ? await cardAutoSettings(o.adminId) : null
 	return {
 		token: o.token,
 		status: o.status,
@@ -223,6 +306,7 @@ export async function publicOrder(token: string): Promise<PublicOrder | null> {
 		customer: { name: o.customerName, telegramId: o.customerTelegramId, phone: o.customerPhone },
 		payment: p ? { id: p.id, method: p.method, status: p.status, amountUsdt: p.amountUsdt, txid: p.txid, receiptRef: p.receiptRef, error: p.error, reviewNote: p.reviewNote } : null,
 		next: o.status === "FULFILLED" ? { type: "done" } : p ? paymentNext(p, s) : { type: "none" },
+		autoVerify: !!card && card.mode !== "MANUAL" && card.autoConfirm,
 		client: o.client ? { name: o.client.name, subUrl: subscriptionUrl(o.client), pageUrl: `${panelUrl()}/s/${o.client.subToken}`, expiresAt: o.client.expiresAt?.toISOString() ?? null, trafficGB: Number(o.client.trafficLimit) / 1024 ** 3 } : null,
 		store: { slug: s?.slug ?? "", title: s?.title || o.admin.brand?.name || brandName(), brand: publicBrand(o.admin.brand, s?.title), supportUrl: s?.supportUrl || o.admin.brand?.supportUrl || null, url: s ? storeUrlFor(s, o.admin.brand?.customDomain) : panelUrl() },
 		error: o.error,
@@ -235,65 +319,8 @@ export async function latestPaymentByOrderToken(token: string): Promise<{ order:
 	return { order: o, payment: o.payments[0] ?? null }
 }
 
-/* ---------- admin side ---------- */
-function orderScope(actor: Pick<Admin, "id" | "role">) {
-	return actor.role === "OWNER" ? {} : { adminId: actor.id }
-}
-
-export async function listOrders(actor: Pick<Admin, "id" | "role">, opts: { status?: string; q?: string; take?: number; skip?: number } = {}) {
-	const take = Math.min(200, Math.max(1, opts.take ?? 50))
-	const skip = Math.max(0, opts.skip ?? 0)
-	const q = opts.q?.trim()
-	const where = {
-		...orderScope(actor),
-		...(opts.status ? { status: opts.status as Order["status"] } : {}),
-		...(q
-			? { OR: [{ customerName: { contains: q, mode: "insensitive" as const } }, { customerTelegramId: { contains: q } }, { customerPhone: { contains: q } }, { id: { endsWith: q } }, { token: q }] }
-			: {}),
-	}
-	const [items, total] = await Promise.all([
-		prisma.order.findMany({
-			where,
-			orderBy: { createdAt: "desc" },
-			take,
-			skip,
-			include: { plan: { select: { name: true } }, client: { select: { id: true, name: true } }, admin: { select: { username: true } }, payments: { orderBy: { createdAt: "desc" }, take: 1 } },
-		}),
-		prisma.order.count({ where }),
-	])
-	return { items, total }
-}
-
-export async function orderForActor(actor: Pick<Admin, "id" | "role">, id: string) {
-	const o = await prisma.order.findUnique({ where: { id }, include: { plan: true, client: true, payments: { orderBy: { createdAt: "desc" } }, admin: { select: { username: true } } } })
-	if (!o) throw new NotFoundError("سفارش پیدا نشد")
-	if (actor.role !== "OWNER" && o.adminId !== actor.id) throw new ForbiddenError()
-	return o
-}
-
-export async function storeOverview(actor: Admin) {
-	const since = new Date(Date.now() - 30 * 86_400_000)
-	const scope = orderScope(actor)
-	const [settings, brand, byStatus, revenue, pendingReview, plans, recent] = await Promise.all([
-		prisma.storeSettings.findUnique({ where: { adminId: actor.id } }),
-		prisma.brand.findUnique({ where: { adminId: actor.id } }),
-		prisma.order.groupBy({ by: ["status"], where: { ...scope, createdAt: { gte: since } }, _count: { _all: true } }),
-		prisma.order.aggregate({ where: { ...scope, status: { in: ["PAID", "FULFILLED"] }, createdAt: { gte: since } }, _sum: { amount: true } }),
-		prisma.payment.count({ where: { ...(actor.role === "OWNER" ? {} : { adminId: actor.id, kind: "ORDER" }), status: "REVIEW" } }),
-		prisma.plan.count({ where: { adminId: actor.id, isActive: true } }),
-		prisma.order.findMany({ where: scope, orderBy: { createdAt: "desc" }, take: 8, include: { plan: { select: { name: true } } } }),
-	])
-	const counts: Record<string, number> = {}
-	for (const r of byStatus) counts[r.status] = r._count._all
-	return {
-		enabled: settings?.enabled ?? false,
-		slug: settings?.slug ?? null,
-		url: settings ? storeUrlFor(settings, brand?.customDomain) : null,
-		methods: settings ? enabledMethods(settings) : [],
-		counts,
-		revenue30d: revenue._sum.amount ?? 0n,
-		pendingReview,
-		activePlans: plans,
-		recent,
-	}
+/** Kept exported for callers that need a plan's server list (storefront cards). */
+export function planLocations(plan: Pick<Plan, "targets">, servers: Array<Pick<Server, "id" | "name">>): string[] {
+	const ids = [...new Set(planTargets(plan).map((t) => t.serverId))]
+	return ids.map((id) => servers.find((s) => s.id === id)?.name).filter((x): x is string => !!x)
 }
