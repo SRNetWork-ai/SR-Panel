@@ -132,6 +132,11 @@ export const v1CreateClientSchema = createClientSchema
 /* ---------- stage 2B: store / wallet ---------- */
 export const paymentMethodSchema = z.enum(["USDT", "CARD", "ZARINPAL"])
 
+/**
+ * Plans are provisioned from a service (preferred) or raw inbounds (legacy).
+ * Kept as a plain object — `/api/plans/[id]` relies on `planSchema.partial()` —
+ * so the "pick one" rule is enforced in core (`createPlan`).
+ */
 export const planSchema = z.object({
 	name: z.string().trim().min(1).max(60),
 	description: z.string().max(500).nullable().optional(),
@@ -141,7 +146,9 @@ export const planSchema = z.object({
 	ipLimit: z.number().int().min(0).max(1000).optional(),
 	price: z.number().min(0).max(1e12),
 	oldPrice: z.number().min(0).max(1e12).nullable().optional(),
-	targets: z.array(clientTargetSchema).min(1).max(50),
+	/** owner-defined service this plan sells */
+	serviceId: z.string().min(1).max(64).nullable().optional(),
+	targets: z.array(clientTargetSchema).max(50).optional(),
 	isActive: z.boolean().optional(),
 	sortOrder: z.number().int().min(-1000).max(1000).optional(),
 })
@@ -199,3 +206,122 @@ export const shopOrderSchema = z.object({
 })
 
 export const shopDiscountSchema = z.object({ planId: z.string().min(1).max(64), code: z.string().min(1).max(24) })
+
+/* ---------- automatic USDT pricing (FX) ---------- */
+export const fxSourceSchema = z.enum(["NOBITEX", "WALLEX", "BITPIN", "TETHERLAND", "RAMZINEX", "CUSTOM"])
+
+export const fxSettingsInput = z
+	.object({
+		mode: z.enum(["MANUAL", "AUTO"]),
+		/** ordered fallback chain: the first source that answers wins */
+		sources: z.array(fxSourceSchema).max(12),
+		marginPct: z.number().min(-50).max(200),
+		roundTo: z.number().int().min(0).max(1_000_000),
+		ttlMin: z.number().int().min(1).max(1440),
+		minRate: z.number().int().min(0).max(100_000_000),
+		maxRate: z.number().int().min(0).max(100_000_000),
+		customUrl: z.string().trim().max(500),
+		customPath: z.string().trim().max(200),
+		customUnit: z.enum(["IRT", "IRR"]),
+	})
+	.partial()
+
+/* ---------- card-to-card auto verification ---------- */
+export const cardAutoInput = z
+	.object({
+		mode: z.enum(["MANUAL", "SMS", "BANK"]),
+		autoConfirm: z.boolean(),
+		uniqueAmount: z.boolean(),
+		windowMin: z.number().int().min(5).max(1440),
+		toleranceIrt: z.number().int().min(0).max(100_000),
+		requireLast4: z.boolean(),
+		senders: z.array(z.string().trim().max(60)).max(20),
+		bankProvider: z.enum(["NONE", "HAMRAHBANK", "CUSTOM"]),
+		bankApiUrl: z.string().trim().max(500),
+		bankUsername: z.string().trim().max(120),
+		bankCard: z.string().trim().max(32),
+		bankPollMin: z.number().int().min(1).max(240),
+		/** plain token/password — stored encrypted; null clears it */
+		bankSecret: z.string().max(500).nullable(),
+	})
+	.partial()
+
+/* ---------- editable storefront content ---------- */
+export const storePageIconSchema = z.enum(["shield", "bolt", "globe", "headset", "infinity", "lock", "device", "star", "clock", "wallet"])
+
+const pageCardInput = z.object({
+	icon: storePageIconSchema.default("star"),
+	title: z.string().trim().max(60).default(""),
+	text: z.string().trim().max(240).default(""),
+})
+
+const pageStepInput = z.object({
+	title: z.string().trim().max(60).default(""),
+	text: z.string().trim().max(240).default(""),
+})
+
+const pageFaqInput = z.object({
+	q: z.string().trim().max(160).default(""),
+	a: z.string().trim().max(800).default(""),
+})
+
+export const storePageInput = z
+	.object({
+		heroBadge: z.string().trim().max(60),
+		heroTitle: z.string().trim().max(120),
+		heroSubtitle: z.string().trim().max(300),
+		heroCta: z.string().trim().max(40),
+		showHero: z.boolean(),
+		showFeatures: z.boolean(),
+		showSteps: z.boolean(),
+		showFaq: z.boolean(),
+		showTrust: z.boolean(),
+		showUsdtPrice: z.boolean(),
+		statCustomers: z.string().trim().max(20),
+		statUptime: z.string().trim().max(20),
+		statLocations: z.string().trim().max(20),
+		features: z.array(pageCardInput).max(8),
+		steps: z.array(pageStepInput).max(8),
+		faq: z.array(pageFaqInput).max(12),
+		trustMoneyBack: z.boolean(),
+		trustInstant: z.boolean(),
+		trustSupport: z.boolean(),
+		trustMultiDevice: z.boolean(),
+		telegramChannel: z.string().trim().max(200),
+		instagram: z.string().trim().max(200),
+		whatsapp: z.string().trim().max(200),
+		noticeText: z.string().trim().max(300),
+		footerNote: z.string().trim().max(300),
+	})
+	.partial()
+
+/** PUT /api/store/extras — every section is optional */
+export const storeExtrasInput = z.object({
+	fx: fxSettingsInput.optional(),
+	card: cardAutoInput.optional(),
+	page: storePageInput.optional(),
+})
+
+/* ---------- deposit webhook (SMS forwarder / bank bridge) ---------- */
+export const depositHookSchema = z.object({
+	/** raw SMS body — any of these keys is accepted */
+	text: z.string().max(1200).nullable().optional(),
+	body: z.string().max(1200).nullable().optional(),
+	message: z.string().max(1200).nullable().optional(),
+	msg: z.string().max(1200).nullable().optional(),
+	sender: z.string().max(60).nullable().optional(),
+	from: z.string().max(60).nullable().optional(),
+	/** or a pre-parsed deposit */
+	amount: z.union([z.number(), z.string().max(30)]).nullable().optional(),
+	refId: z.string().max(60).nullable().optional(),
+	last4: z.string().max(20).nullable().optional(),
+	at: z.string().max(40).nullable().optional(),
+})
+
+/** POST /api/store/deposits — seller enters a deposit by hand */
+export const manualDepositInput = z.object({
+	amount: z.number().int().min(1000).max(1e12),
+	refId: z.string().max(60).nullable().optional(),
+	last4: z.string().max(20).nullable().optional(),
+	note: z.string().max(200).nullable().optional(),
+})

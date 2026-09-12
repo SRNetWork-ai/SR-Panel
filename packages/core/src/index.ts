@@ -36,6 +36,8 @@ export * from "./services/tron"
 export * from "./services/storeSettings"
 export * from "./services/payments"
 export * from "./services/store"
+// editable storefront content (hero / features / steps / FAQ)
+export * from "./services/storePage"
 // in-panel updates
 export * from "./services/updates"
 // automatic FX pricing (named exports only: generic helper names stay module-local)
