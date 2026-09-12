@@ -1,6 +1,6 @@
 /* Plain, JSON-safe shapes shared between server and client components. Only `import type` from server packages here. */
 import type { Admin, Server } from "@srpanel/db"
-import type { ClientWithServers } from "@srpanel/core"
+import type { ClientWithServers, ServiceWithTargets } from "@srpanel/core"
 
 export interface AdminDto {
 	id: string
@@ -56,6 +56,25 @@ export interface ServerDto {
 	createdAt: string
 }
 
+export interface ServiceTargetDto {
+	serverId: string
+	inboundId: number
+	serverName: string
+	inboundLabel: string
+	enabled: boolean
+}
+
+export interface ServiceDto {
+	id: string
+	name: string
+	description: string | null
+	adminIds: string[]
+	isActive: boolean
+	sortOrder: number
+	targets: ServiceTargetDto[]
+	createdAt: string
+}
+
 export interface ClientServerDto {
 	id: string
 	serverId: string
@@ -73,6 +92,9 @@ export interface ClientDto {
 	id: string
 	adminId: string
 	name: string
+	/** prefix shown before the name on every config of this client */
+	tag: string | null
+	serviceId: string | null
 	uuid: string
 	subToken: string
 	subUrl: string
@@ -162,11 +184,26 @@ export function toServerDto(s: Server & { clientCount?: number }): ServerDto {
 	}
 }
 
+export function toServiceDto(s: ServiceWithTargets): ServiceDto {
+	return {
+		id: s.id,
+		name: s.name,
+		description: s.description,
+		adminIds: s.adminIds,
+		isActive: s.isActive,
+		sortOrder: s.sortOrder,
+		targets: s.targetInfo.map((t) => ({ serverId: t.serverId, inboundId: t.inboundId, serverName: t.serverName, inboundLabel: t.inboundLabel, enabled: t.enabled })),
+		createdAt: s.createdAt.toISOString(),
+	}
+}
+
 export function toClientDto(c: ClientWithServers, publicUrl: string): ClientDto {
 	return {
 		id: c.id,
 		adminId: c.adminId,
 		name: c.name,
+		tag: c.tag ?? null,
+		serviceId: c.serviceId ?? null,
 		uuid: c.uuid,
 		subToken: c.subToken,
 		subUrl: `${publicUrl.replace(/\/+$/, "")}/sub/${c.subToken}`,

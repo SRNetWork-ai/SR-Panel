@@ -37,18 +37,39 @@ html.light .srp-topbar {
 	background: rgba(246, 246, 251, 0.8);
 	border-bottom-color: rgba(15, 15, 40, 0.08);
 }
+@media (min-width: 1024px) {
+	/* the desktop shell has its own sidebar header */
+	.srp-topbar {
+		display: none !important;
+	}
+}
 
-/* ---------- mobile tab bar ---------- */
+/* ---------- mobile tab bar ----------
+ * The markup is `lg:hidden`, but this file is loaded *after* the Tailwind layer,
+ * so a bare `display: flex` here used to win on desktop and the bar floated over
+ * the sidebar. Every display rule is therefore media-scoped. */
+@media (max-width: 1023.98px) {
+	.srp-tabbar {
+		display: flex;
+	}
+	.srp-tab {
+		display: flex;
+	}
+}
+@media (min-width: 1024px) {
+	.srp-tabbar,
+	.srp-tab {
+		display: none !important;
+	}
+}
 .srp-tabbar {
 	bottom: calc(0.5rem + var(--srp-safe-b));
-	display: flex;
 	align-items: stretch;
 	gap: 0.125rem;
 	padding: 0.3rem;
 }
 .srp-tab {
 	position: relative;
-	display: flex;
 	flex: 1 1 0;
 	min-width: 0;
 	min-height: 52px;
