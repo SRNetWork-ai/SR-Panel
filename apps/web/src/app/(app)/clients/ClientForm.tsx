@@ -110,7 +110,7 @@ export function ClientForm({ client, services, isOwner, onClose, onSaved }: { cl
 				<div className="space-y-3">
 					<div className="grid gap-3 sm:grid-cols-[1fr_9rem]">
 						<Field label={t("name")}><Input value={form.name} onChange={(e) => set("name", e.target.value)} required placeholder={t("cl_name_ph")} /></Field>
-						<Field label={L("تگ", "Tag")}><Input value={form.tag} onChange={(e) => set("tag", e.target.value)} maxLength={24} placeholder={L("مزلاً SR", "e.g. SR")} /></Field>
+						<Field label={L("تگ", "Tag")}><Input value={form.tag} onChange={(e) => set("tag", e.target.value)} maxLength={24} placeholder={L("مثلاً SR", "e.g. SR")} /></Field>
 					</div>
 					<p className="text-[11px] text-muted">
 						{L("نام کانفیگ روی پنل: ", "Config name on the panel: ")}
@@ -137,7 +137,7 @@ export function ClientForm({ client, services, isOwner, onClose, onSaved }: { cl
 							</label>
 							<p className="text-[11px] text-muted">
 								{delayed
-									? L("تایمر کاربر از لحطه‌ی اولین اتصال شروع می‌شود و " + Number(form.days) + " روز اعتبار دارد؛ تا آن زمان تاریخ انقضا خالی می‌ماند.", "The timer starts at the first connection and then runs for " + Number(form.days) + " day(s); until then the expiry stays empty.")
+									? L("تایمر کاربر از لحظهٔ اولین اتصال شروع می‌شود و " + Number(form.days) + " روز اعتبار دارد؛ تا آن زمان تاریخ انقضا خالی می‌ماند.", "The timer starts at the first connection and then runs for " + Number(form.days) + " day(s); until then the expiry stays empty.")
 									: L("پیش‌فرض: تایمر از همین الان شروع می‌شود.", "Default: the timer starts right now.")}
 							</p>
 							{delayed && Number(form.days) <= 0 && <p className="text-[11px] text-warning">{L("برای این حالت تعداد روز باید بزرگ‌تر از صفر باشد.", "This option needs a day count greater than zero.")}</p>}
