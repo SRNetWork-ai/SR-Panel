@@ -3,6 +3,7 @@ import { AppError, ForbiddenError, NotFoundError } from "../util/errors"
 import { audit } from "./audit"
 import type { ClientTarget } from "./clients"
 import { inboundsOf, listServersFor } from "./servers"
+import { resolveServiceTargets } from "./services"
 import { quoteClientCost } from "./wallet"
 
 export interface PlanInput {
@@ -15,7 +16,13 @@ export interface PlanInput {
 	/** IRT */
 	price: number
 	oldPrice?: number | null
-	targets: ClientTarget[]
+	/**
+	 * Preferred source of the plan's inbounds: the seller picks a service and the
+	 * panel resolves (and re-resolves) its server/inbound pairs. Raw `targets`
+	 * stay supported for legacy plans and owner-level fine tuning.
+	 */
+	serviceId?: string | null
+	targets?: ClientTarget[]
 	isActive?: boolean
 	sortOrder?: number
 }
@@ -28,8 +35,20 @@ export function planTargets(plan: Pick<Plan, "targets">): ClientTarget[] {
 		.map((t) => ({ serverId: String(t.serverId), inboundId: Number(t.inboundId) }))
 }
 
+/** The service a plan was built from (stored alongside each target, so no migration was needed). */
+export function planServiceId(plan: Pick<Plan, "targets">): string | null {
+	const raw = Array.isArray(plan.targets) ? (plan.targets as unknown[]) : []
+	for (const t of raw) {
+		if (t && typeof t === "object") {
+			const v = (t as Record<string, unknown>).serviceId
+			if (typeof v === "string" && v) return v
+		}
+	}
+	return null
+}
+
 async function validateTargets(actor: Pick<Admin, "id" | "role">, targets: ClientTarget[]): Promise<ClientTarget[]> {
-	if (!targets.length) throw new AppError("حداقل یک سرور/اینباند برای پلن انتخاب کنید")
+	if (!targets.length) throw new AppError("یک سرویس برای پلن انتخاب کنید")
 	const servers = await listServersFor(actor)
 	const out: ClientTarget[] = []
 	for (const t of targets) {
@@ -41,6 +60,24 @@ async function validateTargets(actor: Pick<Admin, "id" | "role">, targets: Clien
 	return out
 }
 
+interface ResolvedTargets {
+	targets: ClientTarget[]
+	serviceId: string | null
+}
+
+/** Service first, explicit inbounds as a fallback. */
+async function resolvePlanTargets(actor: Pick<Admin, "id" | "role">, input: Pick<PlanInput, "serviceId" | "targets">): Promise<ResolvedTargets> {
+	const serviceId = (input.serviceId ?? "").trim()
+	if (serviceId) return { targets: await resolveServiceTargets(actor, serviceId), serviceId }
+	return { targets: await validateTargets(actor, input.targets ?? []), serviceId: null }
+}
+
+/** Keeps the resolved inbounds in the Json column (fulfilment relies on them) and tags them with the service. */
+function storedTargets(r: ResolvedTargets): object {
+	const rows = r.targets.map((t) => (r.serviceId ? { ...t, serviceId: r.serviceId } : { ...t }))
+	return rows as unknown as object
+}
+
 function planScope(actor: Pick<Admin, "id" | "role">, adminId?: string) {
 	if (actor.role === "OWNER") return adminId ? { adminId } : {}
 	return { adminId: actor.id }
@@ -49,7 +86,21 @@ function planScope(actor: Pick<Admin, "id" | "role">, adminId?: string) {
 export async function listPlans(actor: Pick<Admin, "id" | "role">, opts: { adminId?: string; activeOnly?: boolean } = {}) {
 	const where = { ...planScope(actor, opts.adminId), ...(opts.activeOnly ? { isActive: true } : {}) }
 	const items = await prisma.plan.findMany({ where, orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }], include: { admin: { select: { username: true } } } })
-	const withCost = await Promise.all(items.map(async (p) => ({ ...p, cost: await quoteClientCost({ id: p.adminId, role: p.adminId === actor.id ? actor.role : "ADMIN" }, p.trafficGB, p.days) })))
+	const serviceIds = [...new Set(items.map((p) => planServiceId(p)).filter((x): x is string => !!x))]
+	const services = serviceIds.length ? await prisma.service.findMany({ where: { id: { in: serviceIds } }, select: { id: true, name: true, isActive: true } }) : []
+	const withCost = await Promise.all(
+		items.map(async (p) => {
+			const serviceId = planServiceId(p)
+			const service = serviceId ? services.find((s) => s.id === serviceId) : undefined
+			return {
+				...p,
+				serviceId,
+				serviceName: service?.name ?? null,
+				serviceActive: service ? service.isActive : null,
+				cost: await quoteClientCost({ id: p.adminId, role: p.adminId === actor.id ? actor.role : "ADMIN" }, p.trafficGB, p.days),
+			}
+		}),
+	)
 	return withCost
 }
 
@@ -79,14 +130,15 @@ function normalize(input: PlanInput) {
 }
 
 export async function createPlan(actor: Admin, input: PlanInput): Promise<Plan> {
-	const targets = await validateTargets(actor, input.targets)
-	const plan = await prisma.plan.create({ data: { adminId: actor.id, ...normalize(input), targets: targets as unknown as object } })
-	await audit(actor.id, "plan.create", plan.id, { name: plan.name, price: plan.price.toString() })
+	const resolved = await resolvePlanTargets(actor, input)
+	const plan = await prisma.plan.create({ data: { adminId: actor.id, ...normalize(input), targets: storedTargets(resolved) } })
+	await audit(actor.id, "plan.create", plan.id, { name: plan.name, price: plan.price.toString(), service: resolved.serviceId ?? undefined, targets: resolved.targets.length })
 	return plan
 }
 
 export async function updatePlan(actor: Admin, id: string, input: Partial<PlanInput>): Promise<Plan> {
 	const current = await getPlanForActor(actor, id)
+	const currentServiceId = planServiceId(current)
 	const merged: PlanInput = {
 		name: input.name ?? current.name,
 		description: input.description === undefined ? current.description : input.description,
@@ -96,14 +148,28 @@ export async function updatePlan(actor: Admin, id: string, input: Partial<PlanIn
 		ipLimit: input.ipLimit ?? current.ipLimit,
 		price: input.price ?? Number(current.price),
 		oldPrice: input.oldPrice === undefined ? (current.oldPrice == null ? null : Number(current.oldPrice)) : input.oldPrice,
+		serviceId: input.serviceId === undefined ? currentServiceId : input.serviceId,
 		targets: input.targets ?? planTargets(current),
 		isActive: input.isActive ?? current.isActive,
 		sortOrder: input.sortOrder ?? current.sortOrder,
 	}
-	const targets = input.targets ? await validateTargets({ id: current.adminId, role: actor.role === "OWNER" && current.adminId !== actor.id ? "ADMIN" : actor.role }, merged.targets) : planTargets(current)
-	const plan = await prisma.plan.update({ where: { id: current.id }, data: { ...normalize(merged), targets: targets as unknown as object } })
+	const scoped: Pick<Admin, "id" | "role"> = { id: current.adminId, role: actor.role === "OWNER" && current.adminId !== actor.id ? "ADMIN" : actor.role }
+	const touched = input.targets !== undefined || input.serviceId !== undefined
+	const resolved = touched ? await resolvePlanTargets(scoped, merged) : { targets: planTargets(current), serviceId: currentServiceId }
+	const plan = await prisma.plan.update({ where: { id: current.id }, data: { ...normalize(merged), targets: storedTargets(resolved) } })
 	await audit(actor.id, "plan.update", plan.id, { fields: Object.keys(input) })
 	return plan
+}
+
+/** Re-reads the service of a plan at order time so fulfilment always uses fresh inbounds. */
+export async function planTargetsFresh(plan: Pick<Plan, "targets" | "adminId">): Promise<ClientTarget[]> {
+	const serviceId = planServiceId(plan)
+	if (!serviceId) return planTargets(plan)
+	try {
+		return await resolveServiceTargets({ id: plan.adminId, role: "ADMIN" }, serviceId)
+	} catch {
+		return planTargets(plan)
+	}
 }
 
 export async function deletePlan(actor: Admin, id: string): Promise<void> {
