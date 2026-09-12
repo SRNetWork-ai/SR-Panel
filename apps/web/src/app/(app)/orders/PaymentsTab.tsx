@@ -7,7 +7,7 @@ import { formatDate, formatNumber } from "@/lib/format"
 import { useLocale, useT } from "@/lib/i18n"
 import { Badge, Button, Card, Empty, Field, Modal, Spinner, Textarea, cx, useToast } from "@/components/ui"
 import { CopyBtn, MiniStat } from "@/components/bits"
-import { PAY_STATUSES, PAY_TONE, tr, type List, type PaymentRow } from "./types"
+import { PAY_STATUSES, PAY_TONE, tronTxUrl, tr, type List, type PaymentRow } from "./types"
 
 export function PaymentsTab({ isOwner, onChanged }: { isOwner: boolean; onChanged: () => void }) {
 	const t = useT()
@@ -116,7 +116,7 @@ export function PaymentsTab({ isOwner, onChanged }: { isOwner: boolean; onChange
 										<td className="max-w-[240px] space-y-0.5 text-xs">
 											{p.txid && (
 												<div className="flex items-center gap-1">
-													<a className="mono truncate text-cyan" title={p.txid} href={`https://tronscan.org/#/transaction/${p.txid}`} target="_blank" rel="noreferrer">{p.txid.slice(0, 10)}…{p.txid.slice(-6)}</a>
+													<a className="mono truncate text-cyan" title={p.txid} href={tronTxUrl(p.txid)} target="_blank" rel="noreferrer">{p.txid.slice(0, 10)}…{p.txid.slice(-6)}</a>
 													<CopyBtn value={p.txid} />
 												</div>
 											)}

@@ -51,5 +51,8 @@ export const PAY_TONE: Record<string, Tone> = { PENDING: "muted", REVIEW: "warni
 export const ORDER_STATUSES: OrderStatus[] = ["PENDING", "PAID", "FULFILLED", "CANCELED", "EXPIRED"]
 export const PAY_STATUSES: PayStatus[] = ["REVIEW", "PENDING", "CONFIRMED", "REJECTED", "EXPIRED"]
 
+/** TRON explorer link for a USDT transaction hash */
+export const tronTxUrl = (txid: string) => "https://tronscan.org/#/transaction/" + txid
+
 /** tiny bilingual helper so new labels do not need new dictionary keys */
 export const tr = (locale: string, fa: string, en: string) => (locale === "en" ? en : fa)
