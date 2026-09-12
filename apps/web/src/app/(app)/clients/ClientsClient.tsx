@@ -7,7 +7,7 @@ import { Copy, Pencil, Plus, QrCode, RotateCcw, Search, Trash2, UserPlus } from 
 import { ApiError, api, copyText } from "@/lib/client"
 import type { ClientDto, ServiceDto } from "@/lib/dto"
 import { daysLeft, formatBytes, percent, relativeTime } from "@/lib/format"
-import { useLocale, useT } from "@/lib/i18n"
+import { tr, useLocale, useT } from "@/lib/i18n"
 import { QR } from "@/components/QR"
 import { Badge, Button, Card, Empty, Input, Modal, PageHeader, Progress, Select, StatusBadge, cx, useConfirm, useToast } from "@/components/ui"
 import { ClientForm } from "./ClientForm"
@@ -17,6 +17,7 @@ const STATUSES = ["", "ACTIVE", "EXPIRED", "LIMITED", "DISABLED"] as const
 export function ClientsClient({ initial, services, openNew, isOwner }: { initial: { items: ClientDto[]; total: number }; services: ServiceDto[]; openNew: boolean; isOwner: boolean }) {
 	const t = useT()
 	const locale = useLocale()
+	const L = (fa: string, en: string) => tr(locale, fa, en)
 	const toast = useToast()
 	const confirm = useConfirm()
 	const router = useRouter()
@@ -120,7 +121,7 @@ export function ClientsClient({ initial, services, openNew, isOwner }: { initial
 									<th>{t("status")}</th>
 									<th className="min-w-44">{t("cl_usage")}</th>
 									<th>{t("cl_expiry")}</th>
-									<th>{t("cl_servers")}</th>
+									<th>{L("سرویس", "Service")}</th>
 									<th>{t("cl_online")}</th>
 									<th className="text-end">{t("actions")}</th>
 								</tr>
@@ -131,6 +132,9 @@ export function ClientsClient({ initial, services, openNew, isOwner }: { initial
 									const pct = c.trafficLimit > 0 ? percent(used, c.trafficLimit) : 0
 									const dl = daysLeft(c.expiresAt)
 									const svc = c.serviceId ? serviceMap.get(c.serviceId) : undefined
+									// one client row can touch the same server several times (one per inbound)
+									const serverNames = [...new Set(c.servers.map((s) => s.serverName))]
+									const broken = c.servers.some((s) => !!s.lastError)
 									return (
 										<tr key={c.id}>
 											<td>
@@ -138,7 +142,6 @@ export function ClientsClient({ initial, services, openNew, isOwner }: { initial
 													{c.tag && <Badge tone="violet">{c.tag}</Badge>}
 													<Link href={`/clients/${c.id}`} className="font-medium hover:text-violet-soft">{c.name}</Link>
 												</div>
-												{svc && <div className="text-[11px] text-muted">{svc.name}</div>}
 												{c.note && <div className="max-w-48 truncate text-[11px] text-muted">{c.note}</div>}
 											</td>
 											<td><StatusBadge status={c.status} /></td>
@@ -150,9 +153,14 @@ export function ClientsClient({ initial, services, openNew, isOwner }: { initial
 												{c.expiresAt ? <span className={cx("num", dl !== null && dl <= 3 && "text-warning", dl !== null && dl <= 0 && "text-danger")}>{dl !== null && dl > 0 ? `${dl} ${t("days")}` : t("st_EXPIRED")}</span> : <span className="text-muted">{t("never")}</span>}
 											</td>
 											<td>
-												<div className="flex flex-wrap gap-1">
-													{c.servers.map((s) => <Badge key={s.id} tone={s.lastError ? "danger" : s.serverStatus === "ONLINE" ? "cyan" : "muted"}>{s.serverName}</Badge>)}
-												</div>
+												{svc ? (
+													<Badge tone={broken ? "danger" : "violet"}>{svc.name}</Badge>
+												) : serverNames.length > 0 ? (
+													<Badge tone={broken ? "danger" : "muted"}>{serverNames.join(" ، ")}</Badge>
+												) : (
+													<span className="text-xs text-muted">—</span>
+												)}
+												{c.servers.length > 0 && <div className="num mt-1 text-[11px] text-muted">{c.servers.length} {L("کانفیگ", "configs")}</div>}
 											</td>
 											<td className="text-xs text-muted">{relativeTime(c.lastOnlineAt, locale)}</td>
 											<td>
