@@ -21,19 +21,26 @@ export const serverSchema = z.object({
 
 export const clientTargetSchema = z.object({ serverId: z.string().min(1), inboundId: z.number().int().nonnegative() })
 
-export const createClientSchema = z.object({
-	name: z.string().min(1).max(64),
-	trafficGB: z.number().min(0).max(1_000_000),
-	days: z.number().int().min(0).max(36500),
-	ipLimit: z.number().int().min(0).max(1000).optional(),
-	note: z.string().max(500).nullable().optional(),
-	telegramId: z.string().max(64).nullable().optional(),
-	phone: z.string().max(32).nullable().optional(),
-	targets: z.array(clientTargetSchema).min(1).max(50),
-})
+export const createClientSchema = z
+	.object({
+		name: z.string().min(1).max(64),
+		/** shown before the client name on every config of this client */
+		tag: z.string().max(24).nullable().optional(),
+		/** provision from an owner-defined service instead of hand-picked inbounds */
+		serviceId: z.string().min(1).max(64).nullable().optional(),
+		trafficGB: z.number().min(0).max(1_000_000),
+		days: z.number().int().min(0).max(36500),
+		ipLimit: z.number().int().min(0).max(1000).optional(),
+		note: z.string().max(500).nullable().optional(),
+		telegramId: z.string().max(64).nullable().optional(),
+		phone: z.string().max(32).nullable().optional(),
+		targets: z.array(clientTargetSchema).max(50).optional(),
+	})
+	.refine((v) => Boolean(v.serviceId) || (v.targets?.length ?? 0) > 0, { message: "یک سرویس یا دست‌کم یک اینباند انتخاب کنید", path: ["targets"] })
 
 export const updateClientSchema = z.object({
 	name: z.string().min(1).max(64).optional(),
+	tag: z.string().max(24).nullable().optional(),
 	trafficGB: z.number().min(0).max(1_000_000).optional(),
 	expiresAt: z.string().datetime().nullable().optional(),
 	addDays: z.number().int().min(-36500).max(36500).optional(),
@@ -43,6 +50,19 @@ export const updateClientSchema = z.object({
 	phone: z.string().max(32).nullable().optional(),
 	enabled: z.boolean().optional(),
 })
+
+/* ---------- services (owner-defined inbound bundles) ---------- */
+export const serviceSchema = z.object({
+	name: z.string().trim().min(1).max(60),
+	description: z.string().max(300).nullable().optional(),
+	targets: z.array(clientTargetSchema).min(1).max(100),
+	/** empty = every admin may use it */
+	adminIds: z.array(z.string().min(1).max(64)).max(500).optional(),
+	isActive: z.boolean().optional(),
+	sortOrder: z.number().int().min(-1000).max(1000).optional(),
+})
+
+export const serviceUpdateSchema = serviceSchema.partial()
 
 export const adminSchema = z.object({
 	username: z.string().regex(/^[a-z0-9_.-]{3,32}$/, "فقط حروف کوچک انگلیسی، عدد، نقطه، خط تیره و زیرخط (۳ـ۳۲ کاراکتر)"),
