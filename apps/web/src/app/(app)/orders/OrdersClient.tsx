@@ -22,7 +22,7 @@ export function OrdersClient({ isOwner, pendingReview }: { isOwner: boolean; pen
 				onChange={setTab}
 				tabs={[
 					{ id: "orders", label: t("ord_tab_orders"), icon: <ShoppingCart className="h-4 w-4" /> },
-					{ id: "payments", label: t("ord_tab_payments"), icon: <CreditCard className="h-4 w-4" />, count: pendingReview },
+					{ id: "payments", label: t("ord_tab_payments"), icon: <CreditCard className="h-4 w-4" />, count: pendingReview > 0 ? pendingReview : undefined },
 				]}
 			/>
 			{tab === "orders" ? (
