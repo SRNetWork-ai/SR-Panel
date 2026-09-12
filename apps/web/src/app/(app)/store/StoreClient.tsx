@@ -4,6 +4,7 @@ import { useState, type ReactNode } from "react"
 import { CreditCard, ExternalLink, LayoutGrid, Package, Percent, Settings2 } from "lucide-react"
 import { useLocale, useT } from "@/lib/i18n"
 import { Badge, PageHeader, Tabs } from "@/components/ui"
+import { CryptoWallets } from "./CryptoWallets"
 import { DiscountsTab } from "./DiscountsTab"
 import { OverviewTab } from "./OverviewTab"
 import { PaymentsTab } from "./PaymentsTab"
@@ -40,7 +41,12 @@ export function StoreClient({ settings, isOwner, initialTab }: { settings: Store
 			<Tabs tabs={tabs} value={tab} onChange={setTab} />
 			{tab === "overview" && <OverviewTab onGoto={setTab} />}
 			{tab === "plans" && <PlansTab isOwner={isOwner} />}
-			{tab === "payments" && <PaymentsTab initial={settings} />}
+			{tab === "payments" && (
+				<div className="space-y-5">
+					<PaymentsTab initial={settings} />
+					<CryptoWallets />
+				</div>
+			)}
 			{tab === "discounts" && <DiscountsTab />}
 			{tab === "settings" && <SettingsTab initial={settings} />}
 		</div>
