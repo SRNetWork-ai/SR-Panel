@@ -52,8 +52,11 @@ export function merchantOf(s: Pick<StoreSettings, "zarinpalMerchant">): string |
 	}
 }
 
+/** Verified custom domains serve the shop at `/shop`, otherwise it is `<panel>/shop/<slug>`. */
 export function storeUrlFor(s: Pick<StoreSettings, "slug">, customDomain?: string | null): string {
-	return customDomain ? `https://${customDomain}/shop` : `${panelUrl()}/shop/${s.slug}`
+	const domain = (customDomain ?? "").trim().replace(/^https?:\/\//i, "").replace(/\/+$/, "")
+	if (domain) return "https://" + domain + "/shop"
+	return panelUrl() + "/shop/" + s.slug
 }
 
 export function enabledMethods(s: StoreSettings): PaymentMethod[] {
