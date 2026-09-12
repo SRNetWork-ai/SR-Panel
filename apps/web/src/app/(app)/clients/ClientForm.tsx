@@ -2,7 +2,7 @@
 
 import Link from "next/link"
 import { useMemo, useState, type FormEvent } from "react"
-import { Layers, Settings2 } from "lucide-react"
+import { Hourglass, Layers, Settings2 } from "lucide-react"
 import { ApiError, api } from "@/lib/client"
 import type { ClientDto, ServiceDto } from "@/lib/dto"
 import { useLocale, useT } from "@/lib/i18n"
@@ -14,6 +14,7 @@ type Form = {
 	serviceId: string
 	trafficGB: number
 	days: number
+	startAfterUse: boolean
 	ipLimit: number
 	note: string
 	phone: string
@@ -38,12 +39,13 @@ const initialForm = (client: ClientDto | null, services: ServiceDto[]): Form =>
 				serviceId: client.serviceId ?? "",
 				trafficGB: Math.round((client.trafficLimit / 1024 ** 3) * 100) / 100,
 				days: 0,
+				startAfterUse: false,
 				ipLimit: client.ipLimit,
 				note: client.note ?? "",
 				phone: client.phone ?? "",
 				telegramId: client.telegramId ?? "",
 			}
-		: { name: "", tag: "", serviceId: services[0]?.id ?? "", trafficGB: 50, days: 30, ipLimit: 0, note: "", phone: "", telegramId: "" }
+		: { name: "", tag: "", serviceId: services[0]?.id ?? "", trafficGB: 50, days: 30, startAfterUse: false, ipLimit: 0, note: "", phone: "", telegramId: "" }
 
 /**
  * Create / edit a client.
@@ -63,7 +65,8 @@ export function ClientForm({ client, services, isOwner, onClose, onSaved }: { cl
 	const selected = useMemo(() => services.find((s) => s.id === form.serviceId) ?? null, [services, form.serviceId])
 	const configs = useMemo(() => (selected ? new Set(selected.targets.map((x) => x.serverId)).size : 0), [selected])
 	const noServices = services.length === 0
-	const incomplete = creating && (noServices || !form.serviceId)
+	const delayed = creating && form.startAfterUse
+	const incomplete = creating && (noServices || !form.serviceId || (form.startAfterUse && Number(form.days) <= 0))
 
 	const submit = async (e: FormEvent) => {
 		e.preventDefault()
@@ -80,7 +83,7 @@ export function ClientForm({ client, services, isOwner, onClose, onSaved }: { cl
 			}
 			const r = client
 				? await api<SaveResult>(`/api/clients/${client.id}`, { method: "PATCH", json: { ...body, addDays: Number(form.days) || undefined } })
-				: await api<SaveResult>("/api/clients", { method: "POST", json: { ...body, days: Number(form.days), serviceId: form.serviceId } })
+				: await api<SaveResult>("/api/clients", { method: "POST", json: { ...body, days: Number(form.days), startAfterUse: form.startAfterUse, serviceId: form.serviceId } })
 			if (r.errors.length) toast.err(`${t("cl_partial_error")} ${r.errors.join(" | ")}`)
 			else toast.ok(t("set_saved"))
 			onSaved(r.client, client === null)
@@ -107,7 +110,7 @@ export function ClientForm({ client, services, isOwner, onClose, onSaved }: { cl
 				<div className="space-y-3">
 					<div className="grid gap-3 sm:grid-cols-[1fr_9rem]">
 						<Field label={t("name")}><Input value={form.name} onChange={(e) => set("name", e.target.value)} required placeholder={t("cl_name_ph")} /></Field>
-						<Field label={L("تگ", "Tag")}><Input value={form.tag} onChange={(e) => set("tag", e.target.value)} maxLength={24} placeholder={L("مثلاً SR", "e.g. SR")} /></Field>
+						<Field label={L("تگ", "Tag")}><Input value={form.tag} onChange={(e) => set("tag", e.target.value)} maxLength={24} placeholder={L("مزلاً SR", "e.g. SR")} /></Field>
 					</div>
 					<p className="text-[11px] text-muted">
 						{L("نام کانفیگ روی پنل: ", "Config name on the panel: ")}
@@ -116,7 +119,7 @@ export function ClientForm({ client, services, isOwner, onClose, onSaved }: { cl
 					{!creating && <p className="text-[11px] text-warning">{L("کانفیگ‌هایی که قبلاً ساخته شده‌اند نامشان روی x-ui تغییر نمی‌کند (مصرف ثبت‌شده گم می‌شود)؛ نام جدید در لینک اشتراک دیده می‌شود.", "Already-created configs keep their x-ui name (renaming would drop their traffic counters); the new name shows up in the subscription.")}</p>}
 					<div className="grid grid-cols-2 gap-3">
 						<Field label={t("cl_traffic_gb")}><Input type="number" min={0} step="0.5" value={form.trafficGB} onChange={(e) => set("trafficGB", Number(e.target.value))} /></Field>
-						<Field label={creating ? t("cl_days") : t("cl_extend_days")}><Input type="number" min={creating ? 0 : -3650} value={form.days} onChange={(e) => set("days", Number(e.target.value))} /></Field>
+						<Field label={creating ? (form.startAfterUse ? L("روز (از اولین اتصال)", "Days (from first use)") : t("cl_days")) : t("cl_extend_days")}><Input type="number" min={creating ? 0 : -3650} value={form.days} onChange={(e) => set("days", Number(e.target.value))} /></Field>
 					</div>
 					<div className="flex flex-wrap gap-1.5">
 						{[10, 30, 50, 100, 200].map((g) => <button key={g} type="button" className={cx("chip", form.trafficGB === g && "chip-on")} onClick={() => set("trafficGB", g)}>{g} GB</button>)}
@@ -124,6 +127,23 @@ export function ClientForm({ client, services, isOwner, onClose, onSaved }: { cl
 						<span className="mx-1 opacity-30">|</span>
 						{[30, 60, 90, 180].map((d) => <button key={d} type="button" className={cx("chip", form.days === d && "chip-on")} onClick={() => set("days", d)}>{d} {t("day_short")}</button>)}
 					</div>
+
+					{creating && (
+						<div className={cx("tile space-y-1.5", delayed && "ring-1 ring-violet-soft/40")}>
+							<label className="flex cursor-pointer items-center gap-2">
+								<input type="checkbox" className="h-4 w-4" checked={form.startAfterUse} onChange={(e) => set("startAfterUse", e.target.checked)} />
+								<Hourglass className="h-3.5 w-3.5 text-violet-soft" />
+								<span className="text-xs font-medium">{L("شروع دوره پس از اولین اتصال (start after use)", "Start the period after first use")}</span>
+							</label>
+							<p className="text-[11px] text-muted">
+								{delayed
+									? L("تایمر کاربر از لحطه‌ی اولین اتصال شروع می‌شود و " + Number(form.days) + " روز اعتبار دارد؛ تا آن زمان تاریخ انقضا خالی می‌ماند.", "The timer starts at the first connection and then runs for " + Number(form.days) + " day(s); until then the expiry stays empty.")
+									: L("پیش‌فرض: تایمر از همین الان شروع می‌شود.", "Default: the timer starts right now.")}
+							</p>
+							{delayed && Number(form.days) <= 0 && <p className="text-[11px] text-warning">{L("برای این حالت تعداد روز باید بزرگ‌تر از صفر باشد.", "This option needs a day count greater than zero.")}</p>}
+						</div>
+					)}
+
 					<div className="grid grid-cols-2 gap-3">
 						<Field label={t("cl_ip_limit")}><Input type="number" min={0} value={form.ipLimit} onChange={(e) => set("ipLimit", Number(e.target.value))} /></Field>
 						<Field label={t("cl_phone")}><Input className="mono text-start" value={form.phone} onChange={(e) => set("phone", e.target.value)} placeholder="0912…" /></Field>
@@ -170,7 +190,7 @@ export function ClientForm({ client, services, isOwner, onClose, onSaved }: { cl
 									})}
 								</div>
 							)}
-							{selected && <p className="text-[11px] text-muted">{L(`${configs} کانفیگ برای این کلاینت ساخته می‌شود.`, `${configs} config(s) will be created for this client.`)}</p>}
+							{selected && <p className="text-[11px] text-muted">{L(configs + " کانفیگ برای این کلاینت ساخته می‌شود.", configs + " config(s) will be created for this client.")}</p>}
 							{isOwner && !noServices && (
 								<Link href="/services" className="inline-flex items-center gap-1 text-[11px] text-violet-soft hover:underline">
 									<Settings2 className="h-3.5 w-3.5" />
