@@ -5,6 +5,8 @@ import "./globals.css"
 import "./nav3d.css"
 import "./motion3d.css"
 import "./mobile.css"
+// must stay last: fixes transparency / 3D-overflow / duplicated .srp-tab rules above
+import "./opaque.css"
 import { ToastProvider } from "@/components/ui"
 import { currentLocale, currentTheme } from "@/lib/auth"
 import { LocaleProvider } from "@/lib/i18n"

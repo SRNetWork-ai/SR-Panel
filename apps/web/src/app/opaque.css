@@ -1,0 +1,195 @@
+/* SRPanel · opacity & depth corrections.
+ * Loaded LAST (after globals.css / nav3d.css / motion3d.css / mobile.css) so it can
+ * repair three regressions without touching the base design layer:
+ *   1. dark surface tokens were so transparent that menus/modals blended with the background
+ *   2. `.tilt` (transform-style: preserve-3d) inside a modal defeats `overflow: hidden`,
+ *      so cards/glows escaped the dialog frame
+ *   3. `.srp-tab` is used both by the page tab bars (nav3d.css) and by the mobile bottom
+ *      tabbar (mobile.css). mobile.css wins the cascade and hides every `.srp-tab`
+ *      on >= 1024px, which is why the settings tab bar rendered as an empty strip.
+ */
+
+:root {
+	color-scheme: dark;
+	/* opaque enough that nothing behind a panel shows through, still slightly tinted */
+	--srp-surface: rgba(20, 18, 40, 0.94);
+	--srp-surface-2: rgba(28, 25, 52, 0.97);
+	--srp-line: rgba(255, 255, 255, 0.12);
+	--srp-sheet: #15122c;
+	--srp-menu: #17142f;
+}
+
+html.light {
+	color-scheme: light;
+	--srp-surface: rgba(255, 255, 255, 0.96);
+	--srp-surface-2: #ffffff;
+	--srp-line: rgba(15, 15, 40, 0.12);
+	--srp-sheet: #ffffff;
+	--srp-menu: #ffffff;
+}
+
+/* ---------- inputs & native dropdowns ---------- */
+.input,
+.select,
+.textarea {
+	background-color: rgba(12, 10, 26, 0.92);
+}
+html.light .input,
+html.light .select,
+html.light .textarea {
+	background-color: #ffffff;
+}
+select option,
+select optgroup {
+	background-color: var(--srp-menu);
+	color: #ecebff;
+}
+html.light select option,
+html.light select optgroup {
+	background-color: #ffffff;
+	color: #15152b;
+}
+
+/* ---------- dialogs / sheets ----------
+ * `.srp-overlay` + `.srp-sheet` are the explicit classes; the `.fixed.inset-0.z-50`
+ * selector covers the current <Modal> markup in components/ui.tsx. */
+.srp-overlay,
+.fixed.inset-0.z-50 {
+	z-index: 100;
+	background: rgba(4, 4, 12, 0.74);
+	-webkit-backdrop-filter: blur(10px) saturate(120%);
+	backdrop-filter: blur(10px) saturate(120%);
+}
+html.light .srp-overlay,
+html.light .fixed.inset-0.z-50 {
+	background: rgba(24, 24, 46, 0.4);
+}
+
+.srp-sheet,
+.fixed.inset-0.z-50 > .glass,
+.fixed.inset-0.z-50 > div > .glass {
+	background: var(--srp-sheet);
+	-webkit-backdrop-filter: none;
+	backdrop-filter: none;
+	border: 1px solid var(--srp-line);
+	box-shadow: 0 40px 120px -30px rgba(0, 0, 0, 0.85);
+	overflow: hidden;
+}
+
+/* nested cards inside a dialog must stay flat: preserve-3d creates a new 3D context
+ * that `overflow: hidden` on the dialog can no longer clip. */
+.srp-sheet .tilt,
+.fixed.inset-0.z-50 .tilt,
+.srp-sheet .depth,
+.fixed.inset-0.z-50 .depth {
+	transform: none !important;
+	transform-style: flat !important;
+}
+.srp-sheet .tilt::after,
+.srp-sheet .sheen::before,
+.srp-sheet .sheen::after,
+.fixed.inset-0.z-50 .tilt::after,
+.fixed.inset-0.z-50 .sheen::before,
+.fixed.inset-0.z-50 .sheen::after {
+	display: none !important;
+}
+.srp-sheet section.glass,
+.fixed.inset-0.z-50 section.glass {
+	background: var(--srp-surface-2);
+	-webkit-backdrop-filter: none;
+	backdrop-filter: none;
+}
+.srp-sheet section.glass:hover,
+.fixed.inset-0.z-50 section.glass:hover,
+.srp-sheet .float,
+.fixed.inset-0.z-50 .float {
+	transform: none !important;
+	animation: none !important;
+}
+
+/* toasts must stay above the dialog layer */
+.z-\[60\] {
+	z-index: 130 !important;
+}
+
+/* ---------- page tab bars (components/parts.tsx <Tabs/>) ---------- */
+.srp-tabs {
+	background-color: rgba(17, 15, 36, 0.92);
+	position: relative;
+	z-index: 1;
+}
+html.light .srp-tabs {
+	background-color: rgba(255, 255, 255, 0.96);
+}
+
+.srp-tabs .srp-tab {
+	display: inline-flex;
+	position: relative;
+	flex: 0 0 auto;
+	flex-direction: row;
+	align-items: center;
+	justify-content: center;
+	gap: 0.45rem;
+	min-width: 0;
+	min-height: 0;
+	border-radius: 0.75rem;
+	padding: 0.5rem 0.85rem;
+	font-size: 0.875rem;
+	font-weight: 600;
+	line-height: 1.45;
+	white-space: nowrap;
+	text-align: center;
+	color: rgba(255, 255, 255, 0.64);
+}
+@media (min-width: 1024px) {
+	/* beats `.srp-tabbar, .srp-tab { display: none !important }` in mobile.css */
+	.srp-tabs .srp-tab {
+		display: inline-flex !important;
+	}
+}
+.srp-tabs .srp-tab > span {
+	max-width: none;
+	overflow: visible;
+	text-overflow: clip;
+}
+.srp-tabs .srp-tab.is-active::after,
+.srp-tabs .srp-tab.active::after {
+	content: none;
+	display: none;
+}
+.srp-tabs .srp-tab:hover {
+	color: rgba(255, 255, 255, 0.95);
+	background: rgba(255, 255, 255, 0.07);
+}
+.srp-tabs .srp-tab.active,
+.srp-tabs .srp-tab.is-active {
+	color: #ffffff;
+	background: linear-gradient(135deg, rgba(139, 92, 246, 0.62), rgba(34, 211, 238, 0.34));
+	box-shadow: 0 14px 30px -18px rgba(139, 92, 246, 0.95), inset 0 1px 0 rgba(255, 255, 255, 0.18);
+}
+html.light .srp-tabs .srp-tab {
+	color: rgba(15, 15, 30, 0.62);
+}
+html.light .srp-tabs .srp-tab:hover {
+	color: rgba(15, 15, 30, 0.95);
+	background: rgba(15, 15, 30, 0.05);
+}
+html.light .srp-tabs .srp-tab.active,
+html.light .srp-tabs .srp-tab.is-active {
+	color: #ffffff;
+}
+.srp-tabs .srp-tab-badge {
+	flex: none;
+}
+
+/* ---------- misc surfaces that used to be see-through ---------- */
+.srp-drawer,
+.tile,
+.pick,
+.chip {
+	background-color: var(--srp-surface-2);
+}
+html.srp-calm .srp-tabs .srp-tab,
+html.srp-calm .srp-sheet * {
+	transition: none;
+}
