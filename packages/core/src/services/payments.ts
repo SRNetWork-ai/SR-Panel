@@ -1,10 +1,8 @@
-import { prisma, type Admin, type Order, type Payment, type PaymentKind, type PaymentMethod, type StoreSettings } from "@srpanel/db"
-import { shortId } from "../security/token"
+import { prisma, type Admin, type Payment, type PaymentKind, type PaymentMethod, type StoreSettings } from "@srpanel/db"
 import { AppError, ForbiddenError, NotFoundError } from "../util/errors"
 import { audit } from "./audit"
-import { createClient, resetClientTraffic, subscriptionUrl, updateClient } from "./clients"
-import { fmtDate, notify } from "./notifications"
-import { planTargets } from "./plans"
+import { fulfillOrder } from "./fulfillment"
+import { notify } from "./notifications"
 import { brandName, getTelegramSettings, panelUrl } from "./settings"
 import { storeSettingsByAdminId, enabledMethods, merchantOf } from "./storeSettings"
 import { tgEscape, tgSendMessage } from "./telegram"
@@ -12,6 +10,9 @@ import { verifyTrc20Payment } from "./tron"
 import { chargeWallet } from "./wallet"
 import { emitEvent } from "./webhooks"
 import { zarinpalRequest, zarinpalVerify } from "./zarinpal"
+
+/** Order fulfilment lives in ./fulfillment; re-exported so existing imports keep working. */
+export { cancelOrder, fulfillOrder, retryFulfill } from "./fulfillment"
 
 export type PaymentNext =
 	| { type: "usdt"; address: string; network: string; amountUsdt: string; rate: number }
@@ -216,87 +217,6 @@ export async function rejectPayment(actor: Admin, paymentId: string, note?: stri
 	}
 	await emitEvent(p.kind === "ORDER" ? p.adminId : null, "payment.rejected", { paymentId: p.id, kind: p.kind, note })
 	return updated
-}
-
-/* ---------- fulfilment ---------- */
-export async function fulfillOrder(orderId: string): Promise<Order> {
-	const order = await prisma.order.findUnique({ where: { id: orderId }, include: { admin: true } })
-	if (!order) throw new NotFoundError("سفارش پیدا نشد")
-	if (order.status === "FULFILLED") return order
-	if (order.status !== "PAID") throw new AppError("سفارش هنوز پرداخت نشده است")
-	const seller = order.admin
-	const snap = order.planSnapshot as unknown as PlanSnapshot
-	try {
-		let clientId: string
-		if (order.renewClientId) {
-			const existing = await prisma.client.findFirst({ where: { id: order.renewClientId, adminId: seller.id } })
-			if (!existing) throw new AppError("کلاینت برای تمدید پیدا نشد")
-			await resetClientTraffic(seller, existing.id)
-			await updateClient(seller, existing.id, { trafficGB: snap.trafficGB, addDays: snap.days, enabled: true })
-			clientId = existing.id
-		} else {
-			const name = (order.customerName ?? "").trim() || `${snap.name}-${shortId(5)}`
-			const { client } = await createClient(seller, {
-				name,
-				trafficGB: snap.trafficGB,
-				days: snap.days,
-				ipLimit: snap.ipLimit,
-				telegramId: order.customerTelegramId ?? undefined,
-				phone: order.customerPhone ?? undefined,
-				note: `سفارش فروشگاه #${order.id.slice(-6)}`,
-				targets: snap.targets?.length ? snap.targets : order.planId ? planTargets(await prisma.plan.findUniqueOrThrow({ where: { id: order.planId } })) : [],
-			})
-			clientId = client.id
-		}
-		const done = await prisma.order.update({ where: { id: order.id }, data: { status: "FULFILLED", clientId, fulfilledAt: new Date(), error: null } })
-		if (order.planId) await prisma.plan.update({ where: { id: order.planId }, data: { sold: { increment: 1 } } }).catch(() => undefined)
-		await audit(seller.id, "order.fulfill", order.id, { clientId, amount: order.amount.toString() })
-		await emitEvent(seller.id, "order.fulfilled", { orderId: order.id, clientId, amount: order.amount.toString(), plan: snap.name })
-		await notify("order.fulfilled", `🛒 <b>سفارش جدید تحویل شد</b>\nپلن: ${tgEscape(snap.name)}\nمبلغ: <b>${fmtIrt(order.amount)}</b> تومان\nمشتری: ${tgEscape(order.customerName || order.customerTelegramId || order.customerPhone || "-")}`, { dedupeKey: `order:${order.id}:fulfilled`, targetId: order.id, recipients: { adminId: seller.id } })
-		await notifyCustomer(done.id)
-		return done
-	} catch (err) {
-		const message = err instanceof Error ? err.message : String(err)
-		const failed = await prisma.order.update({ where: { id: order.id }, data: { error: message.slice(0, 500) } })
-		await notify("order.failed", `⚠️ <b>تحویل سفارش ناموفق بود</b>\n${tgEscape(message)}\nسفارش: ${panelUrl()}/orders`, { dedupeKey: `order:${order.id}:failed:${Date.now()}`, targetId: order.id, recipients: { adminId: seller.id } })
-		return failed
-	}
-}
-
-async function notifyCustomer(orderId: string): Promise<void> {
-	const order = await prisma.order.findUnique({ where: { id: orderId }, include: { client: true, admin: { include: { brand: true } } } })
-	if (!order?.client || !order.customerTelegramId) return
-	const tg = await getTelegramSettings()
-	if (!tg.enabled || !tg.botToken) return
-	const sub = subscriptionUrl(order.client)
-	const page = `${panelUrl()}/s/${order.client.subToken}`
-	const text = `✅ <b>سفارش شما فعال شد</b> — ${tgEscape(order.admin.brand?.name || brandName())}\n\n🔗 لینک اشتراک:\n<code>${tgEscape(sub)}</code>\n\n📱 صفحه اشتراک و آموزش: ${page}\n📅 انقضا: ${fmtDate(order.client.expiresAt, false) || "نامحدود"}`
-	await tgSendMessage(text, { chatId: order.customerTelegramId })
-}
-
-export async function retryFulfill(actor: Admin, orderId: string): Promise<Order> {
-	const order = await prisma.order.findUnique({ where: { id: orderId } })
-	if (!order) throw new NotFoundError("سفارش پیدا نشد")
-	if (actor.role !== "OWNER" && order.adminId !== actor.id) throw new ForbiddenError()
-	if (order.status === "PENDING") {
-		// manual confirm without payment (e.g. paid off-platform)
-		await prisma.order.update({ where: { id: order.id }, data: { status: "PAID", paidAt: new Date() } })
-		await prisma.payment.updateMany({ where: { orderId: order.id, status: { in: ["PENDING", "REVIEW"] } }, data: { status: "CONFIRMED", reviewedById: actor.id, reviewedAt: new Date(), reviewNote: "تأیید دستی" } })
-		await audit(actor.id, "order.manual_paid", order.id)
-	}
-	return fulfillOrder(order.id)
-}
-
-export async function cancelOrder(actor: Admin, orderId: string): Promise<Order> {
-	const order = await prisma.order.findUnique({ where: { id: orderId } })
-	if (!order) throw new NotFoundError("سفارش پیدا نشد")
-	if (actor.role !== "OWNER" && order.adminId !== actor.id) throw new ForbiddenError()
-	if (order.status === "FULFILLED") throw new AppError("سفارش تحویل‌شده را نمی‌توان لغو کرد")
-	await prisma.payment.updateMany({ where: { orderId: order.id, status: { in: ["PENDING", "REVIEW"] } }, data: { status: "REJECTED", reviewedById: actor.id, reviewedAt: new Date(), reviewNote: "سفارش لغو شد" } })
-	const o = await prisma.order.update({ where: { id: order.id }, data: { status: "CANCELED" } })
-	await audit(actor.id, "order.cancel", order.id)
-	await emitEvent(order.adminId, "order.canceled", { orderId: order.id })
-	return o
 }
 
 /* ---------- top-ups (reseller -> owner) ---------- */

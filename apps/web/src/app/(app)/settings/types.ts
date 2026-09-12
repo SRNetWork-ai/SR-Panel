@@ -2,7 +2,7 @@ import { ApiError } from "@/lib/client"
 
 export type Brand = { name: string; tagline: string; logoUrl: string; primaryColor: string; accentColor: string; supportUrl: string; telegramUrl: string }
 export type SystemInfo = { version: string; publicUrl: string; tz: string; agentHint: boolean }
-export type Tab = "account" | "security" | "brand" | "appearance" | "system" | "tools"
+export type Tab = "account" | "security" | "session" | "brand" | "appearance" | "system" | "tools"
 export type Tone = "success" | "warning" | "danger" | "muted"
 
 export const DEFAULT_PRIMARY = "#8b5cf6"

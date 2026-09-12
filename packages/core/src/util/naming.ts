@@ -5,7 +5,7 @@
  * (previously we generated `${slug}-${shortId}`), optionally prefixed with a
  * short "tag" so every config of one customer is grouped visually.
  */
-import { createHash } from "node:crypto"
+import { createHash, randomBytes } from "node:crypto"
 
 /** Characters that would break the panel payload / share links. Everything else (incl. Persian) is kept. */
 const UNSAFE = /["'`\\<>{}\u0000-\u001f\u007f]/g
@@ -18,6 +18,28 @@ export function sanitizeConfigName(name: string | null | undefined, fallback = "
 		.trim()
 		.slice(0, 64)
 	return clean || fallback
+}
+
+/** Unambiguous lowercase alphabet: no l/1/i/o/0 so a handle can be read out loud. */
+const HANDLE_ALPHABET = "abcdefghjkmnpqrstuvwxyz23456789"
+
+/**
+ * A random, panel-safe config name such as `srp-7k2mx94a`.
+ *
+ * Storefront orders must not inherit whatever the buyer typed in the name field — one
+ * test order was enough to name every config «تست» — so fulfilment always generates a
+ * fresh handle instead. `prefix` is reduced to ASCII letters/digits and may be empty.
+ */
+export function randomConfigName(prefix: string | null = "srp", length = 8): string {
+	const size = Math.max(4, Math.min(24, Math.round(length)))
+	const base = String(prefix ?? "")
+		.replace(/[^A-Za-z0-9]/g, "")
+		.slice(0, 12)
+		.toLowerCase()
+	const bytes = randomBytes(size)
+	let id = ""
+	for (let i = 0; i < size; i++) id += HANDLE_ALPHABET[(bytes[i] ?? 0) % HANDLE_ALPHABET.length]
+	return base ? `${base}-${id}` : id
 }
 
 /**

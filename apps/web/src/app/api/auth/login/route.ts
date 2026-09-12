@@ -1,8 +1,8 @@
 import { cookies } from "next/headers"
 import { z } from "zod"
-import { SESSION_DAYS, ensureOwner, loginWithPassword } from "@srpanel/core"
+import { ensureOwner, loginWithPassword } from "@srpanel/core"
 import { ok, parseBody, route } from "@/lib/api"
-import { SESSION_COOKIE, clientIp } from "@/lib/auth"
+import { IDLE_COOKIE, IDLE_MIN_COOKIE, SESSION_COOKIE, clientIp, idleCookieOptions, idleMinutesOf, sessionCookieOptions } from "@/lib/auth"
 
 const schema = z.object({
 	username: z.string().min(1).max(64),
@@ -18,12 +18,9 @@ export const POST = route(async (req) => {
 	if (!result.ok) return ok({ ok: false, reason: result.reason })
 
 	const store = await cookies()
-	store.set(SESSION_COOKIE, result.token, {
-		httpOnly: true,
-		sameSite: "lax",
-		secure: (process.env.SRP_PUBLIC_URL || "").startsWith("https://"),
-		path: "/",
-		maxAge: SESSION_DAYS * 24 * 60 * 60,
-	})
-	return ok({ ok: true, admin: { id: result.admin.id, username: result.admin.username, role: result.admin.role } })
+	const minutes = idleMinutesOf(store.get(IDLE_MIN_COOKIE)?.value)
+	// no maxAge: closing the browser ends the session and the panel asks for user/pass again
+	store.set(SESSION_COOKIE, result.token, sessionCookieOptions())
+	store.set(IDLE_COOKIE, String(Date.now()), idleCookieOptions(minutes))
+	return ok({ ok: true, idleMinutes: minutes, admin: { id: result.admin.id, username: result.admin.username, role: result.admin.role } })
 })
