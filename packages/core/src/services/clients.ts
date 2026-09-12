@@ -7,6 +7,7 @@ import { bytesToGb, daysFromNow, gbToBytes } from "../util/bytes"
 import { AppError, ForbiddenError, NotFoundError } from "../util/errors"
 import { configLabel, remoteSubId, sanitizeConfigName } from "../util/naming"
 import { audit } from "./audit"
+import { clearPendingStart, getPendingStart, pendingExpiryMs, setPendingStart, withPendingNote } from "./pendingStart"
 import { adapterFor, inboundsOf, recomputeClient } from "./servers"
 import { resolveServiceTargets } from "./services"
 import { assertAffordable, chargeWallet, quoteClientCost } from "./wallet"
@@ -26,6 +27,11 @@ export interface CreateClientInput {
 	trafficGB: number
 	/** days from now, 0 = never */
 	days: number
+	/**
+	 * Delayed start: `days` is not counted from now but from the customer's first
+	 * connection (3x-ui gets a negative expiry, the real date is written by the worker).
+	 */
+	startAfterUse?: boolean
 	ipLimit?: number
 	note?: string
 	telegramId?: string
@@ -57,6 +63,7 @@ const clientInclude = {
 /** Panels answer "already in use" / "duplicate" when an email or subId is taken. */
 const COLLISION = /(in use|already|exists?|duplicate|تکرار|موجود)/i
 const PANEL_ATTEMPTS = 4
+const DAY_MS = 86_400_000
 
 /** One remote client: every inbound of a server that shares the same panel config. */
 interface PanelGroup {
@@ -146,12 +153,16 @@ function groupLinks(links: ClientWithServers["servers"]): LinkGroup[] {
 	return [...groups.values()]
 }
 
-function provisionInput(client: Client, remoteEmail: string, flow: string, subId: string): ProvisionClientInput {
+/**
+ * `expiryMsOverride` carries the delayed-start value: 3x-ui counts a negative
+ * expiryTime from the client's first connection instead of from now.
+ */
+function provisionInput(client: Client, remoteEmail: string, flow: string, subId: string, expiryMsOverride?: number): ProvisionClientInput {
 	return {
 		uuid: client.uuid,
 		email: remoteEmail,
 		totalBytes: Number(client.trafficLimit),
-		expiryTimeMs: client.expiresAt ? client.expiresAt.getTime() : 0,
+		expiryTimeMs: expiryMsOverride !== undefined ? expiryMsOverride : client.expiresAt ? client.expiresAt.getTime() : 0,
 		limitIp: client.ipLimit,
 		enable: client.status !== "DISABLED",
 		subId,
@@ -167,14 +178,14 @@ function provisionInput(client: Client, remoteEmail: string, flow: string, subId
  * from the group, but two customers may well carry the same name, so on a collision we
  * retry with a fresh salt / a numeric suffix instead of leaving the group unprovisioned.
  */
-async function addToPanel(group: PanelGroup, client: Client, baseEmail: string): Promise<string> {
+async function addToPanel(group: PanelGroup, client: Client, baseEmail: string, expiryMsOverride?: number): Promise<string> {
 	const { server, protocol, flow, inboundIds } = group
 	let email = baseEmail
 	let last: unknown
 	for (let attempt = 0; attempt < PANEL_ATTEMPTS; attempt++) {
 		const subId = remoteSubId(client.subToken, server.id, inboundIds[0]!, attempt ? `r${attempt}` : "")
 		try {
-			await adapterFor(server).addClient(inboundIds, protocol, provisionInput(client, email, flow, subId))
+			await adapterFor(server).addClient(inboundIds, protocol, provisionInput(client, email, flow, subId, expiryMsOverride))
 			return email
 		} catch (err) {
 			last = err
@@ -192,12 +203,12 @@ async function addToPanel(group: PanelGroup, client: Client, baseEmail: string):
 }
 
 /** The email never changes on update, but the derived subId may still hit another client. */
-async function updateOnPanel(server: Server, group: LinkGroup, client: Client, protocol: InboundProtocol, flow: string): Promise<void> {
+async function updateOnPanel(server: Server, group: LinkGroup, client: Client, protocol: InboundProtocol, flow: string, expiryMsOverride?: number): Promise<void> {
 	let last: unknown
 	for (let attempt = 0; attempt < PANEL_ATTEMPTS; attempt++) {
 		const subId = remoteSubId(client.subToken, server.id, group.inboundIds[0]!, attempt ? `r${attempt}` : "")
 		try {
-			await adapterFor(server).updateClient(group.inboundIds, protocol, provisionInput(client, group.remoteEmail, flow, subId))
+			await adapterFor(server).updateClient(group.inboundIds, protocol, provisionInput(client, group.remoteEmail, flow, subId, expiryMsOverride))
 			return
 		} catch (err) {
 			last = err
@@ -247,6 +258,8 @@ export async function createClient(actor: Admin, input: CreateClientInput): Prom
 	const serverIds = [...new Set(targets.map((t) => t.serverId))]
 	const servers = await prisma.server.findMany({ where: { id: { in: serverIds }, isActive: true } })
 	if (servers.length !== serverIds.length) throw new AppError("یکی از سرورها در دسترس نیست")
+	// delayed start: keep expiresAt empty, the panel counts the days from the first connection
+	const delayedDays = input.startAfterUse && input.days > 0 ? Math.min(3650, Math.floor(input.days)) : 0
 
 	const client = await prisma.client.create({
 		data: {
@@ -257,17 +270,19 @@ export async function createClient(actor: Admin, input: CreateClientInput): Prom
 			uuid: randomUUID(),
 			subToken: randomToken(18),
 			trafficLimit: limitBytes,
-			expiresAt: input.days > 0 ? daysFromNow(input.days) : null,
+			expiresAt: delayedDays > 0 ? null : input.days > 0 ? daysFromNow(input.days) : null,
 			ipLimit: Math.max(0, input.ipLimit ?? 0),
-			note: input.note?.trim() || null,
+			note: delayedDays > 0 ? withPendingNote(input.note, delayedDays) : input.note?.trim() || null,
 			telegramId: input.telegramId?.trim() || null,
 			phone: input.phone?.trim() || null,
 		},
 	})
+	if (delayedDays > 0) await setPendingStart(client.id, delayedDays)
 	if (cost > 0n) await chargeWallet(actor, -cost, "PURCHASE", { refType: "client", refId: client.id, note: `ساخت کلاینت ${name}` })
 
 	// the name the operator typed (with the tag in front) is what the panel shows
 	const label = configLabel(client)
+	const panelExpiryMs = delayedDays > 0 ? -(delayedDays * DAY_MS) : undefined
 	const groups = groupTargets(targets, servers, client.uuid)
 	const perServer = new Map<string, number>()
 	const errors: string[] = []
@@ -285,7 +300,7 @@ export async function createClient(actor: Admin, input: CreateClientInput): Prom
 			linkIds.push(link.id)
 		}
 		try {
-			const remoteEmail = await addToPanel(group, client, baseEmail)
+			const remoteEmail = await addToPanel(group, client, baseEmail, panelExpiryMs)
 			if (remoteEmail !== baseEmail) await prisma.clientServer.updateMany({ where: { id: { in: linkIds } }, data: { remoteEmail } })
 		} catch (err) {
 			const message = err instanceof Error ? err.message : String(err)
@@ -299,6 +314,7 @@ export async function createClient(actor: Admin, input: CreateClientInput): Prom
 		serviceId: input.serviceId ?? null,
 		targets: targets.length,
 		configs: groups.length,
+		startAfterUse: delayedDays || null,
 		errors: errors.length,
 	})
 	return { client: await getClientForActor(actor, client.id), errors }
@@ -314,6 +330,9 @@ export async function createClient(actor: Admin, input: CreateClientInput): Prom
  */
 export async function pushClient(client: ClientWithServers): Promise<string[]> {
 	const errors: string[] = []
+	// a client whose period has not started yet keeps its negative panel expiry
+	const pending = pendingExpiryMs(await getPendingStart(client.id))
+	const expiryMsOverride = pending === null ? undefined : pending
 	const servers = await prisma.server.findMany({ where: { id: { in: [...new Set(client.servers.map((s) => s.serverId))] } } })
 	for (const group of groupLinks(client.servers)) {
 		const server = servers.find((s) => s.id === group.serverId)
@@ -321,7 +340,7 @@ export async function pushClient(client: ClientWithServers): Promise<string[]> {
 		const inbound = inboundsOf(server).find((i) => i.id === group.inboundIds[0])
 		try {
 			const flow = inbound ? resolveFlow(inbound, client.uuid) : ""
-			await updateOnPanel(server, group, client, inbound?.protocol ?? "vless", flow)
+			await updateOnPanel(server, group, client, inbound?.protocol ?? "vless", flow, expiryMsOverride)
 			await prisma.clientServer.updateMany({ where: { id: { in: group.linkIds } }, data: { lastError: null } })
 		} catch (err) {
 			const message = err instanceof Error ? err.message : String(err)
@@ -348,8 +367,10 @@ export async function updateClient(actor: Admin, id: string, input: UpdateClient
 	if (input.expiresAt !== undefined) data.expiresAt = input.expiresAt ? new Date(input.expiresAt) : null
 	if (input.addDays) {
 		const base = current.expiresAt && current.expiresAt.getTime() > Date.now() ? current.expiresAt.getTime() : Date.now()
-		data.expiresAt = new Date(base + input.addDays * 86_400_000)
+		data.expiresAt = new Date(base + input.addDays * DAY_MS)
 	}
+	// an explicit date wins over a not-yet-started period
+	if (input.expiresAt !== undefined || input.addDays) await clearPendingStart(current.id)
 	if (input.ipLimit !== undefined) data.ipLimit = Math.max(0, input.ipLimit)
 	if (input.note !== undefined) data.note = input.note?.trim() || null
 	if (input.telegramId !== undefined) data.telegramId = input.telegramId?.trim() || null
@@ -410,6 +431,7 @@ export async function deleteClient(actor: Admin, id: string): Promise<string[]> 
 		}
 	}
 	await prisma.client.delete({ where: { id: client.id } })
+	await clearPendingStart(client.id)
 	await audit(actor.id, "client.delete", client.id, { name: client.name, errors: errors.length })
 	return errors
 }
