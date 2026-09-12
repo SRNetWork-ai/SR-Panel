@@ -37,6 +37,11 @@ export interface SubscriptionPayload {
 	}
 	brand: { name: string; tagline: string | null; logoUrl: string | null; primaryColor: string; accentColor: string; supportUrl: string | null; telegramUrl: string | null }
 	links: Array<{ server: string; remark: string; uri: string }>
+	/**
+	 * Informational pseudo-config (never connects) placed first in the app list so
+	 * the customer sees quota / expiry right inside v2rayNG, Hiddify, Streisand…
+	 */
+	infoUri: string | null
 	servers: SubServerInfo[]
 	/** last 14 days, aggregated per day */
 	usage: SubUsagePoint[]
@@ -61,6 +66,8 @@ const DEFAULT_BRAND = {
 }
 
 const DAY = 86_400_000
+/** A syntactically valid VLESS link pointing nowhere: apps list it but can never dial it. */
+const VOID_URI = "vless://00000000-0000-0000-0000-000000000000@127.0.0.1:1?type=tcp&security=none#"
 
 /**
  * Hourly samples are stored as counters; when the series is non-decreasing we
@@ -161,8 +168,20 @@ export async function buildSubscription(subToken: string): Promise<SubscriptionP
 		byServer.set(l.serverId, row)
 	}
 
-	// When the account is not usable we still return one informational "link" so apps show a reason instead of an empty list.
-	const body = links.length ? links.map((l) => l.uri).join("\n") : statusNotice(client.status, brand.name)
+	// The first entry is always the read-only info line; when the account is not usable we
+	// additionally return one notice "link" so apps show a reason instead of an empty list.
+	const infoUri = voidConfig(
+		infoRemark({
+			brandName: brand.name,
+			status: client.status,
+			usedBytes,
+			trafficLimit,
+			daysLeft,
+			pending: client.expiresAt === null && (client.status === "ACTIVE" ? usedBytes === 0 : false),
+			serviceName: service?.name ?? null,
+		}),
+	)
+	const body = [infoUri, ...(links.length ? links.map((l) => l.uri) : [statusNotice(client.status, brand.name)])].join("\n")
 
 	return {
 		client: {
@@ -183,6 +202,7 @@ export async function buildSubscription(subToken: string): Promise<SubscriptionP
 		},
 		brand,
 		links,
+		infoUri,
 		servers: [...byServer.values()],
 		usage,
 		stats: {
@@ -200,11 +220,53 @@ export async function buildSubscription(subToken: string): Promise<SubscriptionP
 	}
 }
 
+/** Wraps a remark into the unusable VLESS URI apps happily display. */
+function voidConfig(remark: string): string {
+	return VOID_URI + encodeURIComponent(remark)
+}
+
+function humanBytes(bytes: number): string {
+	const gb = bytes / 1024 ** 3
+	if (gb >= 100) return Math.round(gb) + "GB"
+	if (gb >= 1) return Math.round(gb * 10) / 10 + "GB"
+	const mb = bytes / 1024 ** 2
+	return Math.max(0, Math.round(mb)) + "MB"
+}
+
+function usageBar(pct: number): string {
+	const filled = Math.max(0, Math.min(10, Math.round(pct / 10)))
+	return "▰".repeat(filled) + "▱".repeat(10 - filled)
+}
+
+function statusLabel(status: string): string {
+	if (status === "EXPIRED") return "منقضی شده"
+	if (status === "LIMITED") return "حجم به پایان رسیده"
+	if (status === "DISABLED") return "غیرفعال"
+	return "فعال"
+}
+
+/** The single line every app shows as a config name: quota, remaining days, state. */
+function infoRemark(p: { brandName: string; status: string; usedBytes: number; trafficLimit: number; daysLeft: number | null; pending: boolean; serviceName: string | null }): string {
+	const parts: string[] = []
+	if (p.trafficLimit > 0) {
+		const pct = Math.min(100, Math.round((p.usedBytes / p.trafficLimit) * 100))
+		parts.push(usageBar(pct) + " " + pct + "٪")
+		parts.push("مصرف " + humanBytes(p.usedBytes) + " از " + humanBytes(p.trafficLimit))
+		parts.push("باقی " + humanBytes(Math.max(0, p.trafficLimit - p.usedBytes)))
+	} else {
+		parts.push("مصرف " + humanBytes(p.usedBytes) + " • حجم نامحدود")
+	}
+	if (p.daysLeft === null) parts.push(p.pending ? "شروع پس از اولین اتصال" : "بدون تاریخ انقضا")
+	else if (p.daysLeft >= 0) parts.push(p.daysLeft + " روز باقی‌مانده")
+	else parts.push("منقضی شده")
+	if (p.status !== "ACTIVE") parts.push(statusLabel(p.status))
+	if (p.serviceName) parts.push(p.serviceName)
+	return "ℹ️ " + p.brandName + " ➜ " + parts.join(" | ")
+}
+
 function statusNotice(status: string, brandName: string): string {
-	const text =
-		status === "EXPIRED" ? "اشتراک منقضی شده" : status === "LIMITED" ? "حجم به پایان رسیده" : status === "DISABLED" ? "اشتراک غیرفعال است" : "سروری در دسترس نیست"
-	// A syntactically valid but unusable vless link that carries the message as its remark.
-	return `vless://00000000-0000-0000-0000-000000000000@127.0.0.1:1?type=tcp&security=none#${encodeURIComponent(`${brandName} • ${text}`)}`
+	// An unusable link that carries the reason as its remark.
+	return voidConfig(brandName + " • " + (status === "ACTIVE" ? "سروری در دسترس نیست" : statusLabel(status)))
 }
 
 async function defaultBrand() {
