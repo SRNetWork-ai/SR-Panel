@@ -1,20 +1,23 @@
 "use client"
 
 import { useState, type ReactNode } from "react"
-import { ExternalLink, LayoutGrid, Package, Percent, Settings2 } from "lucide-react"
-import { useT } from "@/lib/i18n"
+import { CreditCard, ExternalLink, LayoutGrid, Package, Percent, Settings2 } from "lucide-react"
+import { useLocale, useT } from "@/lib/i18n"
 import { Badge, PageHeader, Tabs } from "@/components/ui"
 import { DiscountsTab } from "./DiscountsTab"
 import { OverviewTab } from "./OverviewTab"
+import { PaymentsTab } from "./PaymentsTab"
 import { PlansTab } from "./PlansTab"
 import { SettingsTab } from "./SettingsTab"
-import type { StoreSettings, Tab } from "./types"
+import { tr, type StoreSettings, type Tab } from "./types"
 
 export function StoreClient({ settings, isOwner, initialTab }: { settings: StoreSettings; isOwner: boolean; initialTab?: string }) {
 	const t = useT()
+	const locale = useLocale()
 	const tabs: Array<{ id: Tab; label: string; icon: ReactNode }> = [
 		{ id: "overview", label: t("store_tab_overview"), icon: <LayoutGrid className="h-4 w-4" /> },
 		{ id: "plans", label: t("store_tab_plans"), icon: <Package className="h-4 w-4" /> },
+		{ id: "payments", label: tr(locale, "پرداخت‌ها", "Payments"), icon: <CreditCard className="h-4 w-4" /> },
 		{ id: "discounts", label: t("store_tab_discounts"), icon: <Percent className="h-4 w-4" /> },
 		{ id: "settings", label: t("store_tab_settings"), icon: <Settings2 className="h-4 w-4" /> },
 	]
@@ -37,6 +40,7 @@ export function StoreClient({ settings, isOwner, initialTab }: { settings: Store
 			<Tabs tabs={tabs} value={tab} onChange={setTab} />
 			{tab === "overview" && <OverviewTab onGoto={setTab} />}
 			{tab === "plans" && <PlansTab isOwner={isOwner} />}
+			{tab === "payments" && <PaymentsTab initial={settings} />}
 			{tab === "discounts" && <DiscountsTab />}
 			{tab === "settings" && <SettingsTab initial={settings} />}
 		</div>
