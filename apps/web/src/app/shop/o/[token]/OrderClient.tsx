@@ -1,19 +1,20 @@
 "use client"
 
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react"
-import { AlertTriangle, Check, CheckCircle2, Clock, Copy, CreditCard, ExternalLink, FileImage, LifeBuoy, Loader2, RefreshCw, Send, ShieldCheck, Upload, XCircle } from "lucide-react"
+import { AlertTriangle, Check, CheckCircle2, Clock, Coins, Copy, CreditCard, ExternalLink, FileImage, LifeBuoy, Loader2, RefreshCw, Send, ShieldCheck, Upload, XCircle } from "lucide-react"
 import { api, copyText } from "@/lib/client"
 import { formatNumber } from "@/lib/format"
 import { QR } from "@/components/QR"
 
 type Method = "USDT" | "CARD" | "ZARINPAL" | "WALLET" | "MANUAL"
 type Next =
-	| { type: "usdt"; address: string; network: string; amountUsdt: string; rate: number }
+	| { type: "usdt"; address: string; network: string; amountUsdt: string; rate: number; symbol?: string; networkLabel?: string; memo?: string | null; label?: string | null; assetId?: string }
 	| { type: "card"; cardNumber: string; cardHolder: string | null; cardBank: string | null }
 	| { type: "redirect"; url: string }
 	| { type: "review" }
 	| { type: "done" }
 	| { type: "none" }
+type CoinOption = { assetId: string; symbol: string; network: string; networkLabel: string; label: string | null; amount: string | null; rateIrt: number | null; error: string | null }
 export type PublicOrder = {
 	token: string
 	status: "PENDING" | "PAID" | "FULFILLED" | "CANCELED" | "EXPIRED"
@@ -56,6 +57,9 @@ export function OrderClient({ initial, payResult }: { initial: PublicOrder; payR
 	const [cardPan, setCardPan] = useState("")
 	const [file, setFile] = useState<File | null>(null)
 	const [copied, setCopied] = useState<string | null>(null)
+	const [coins, setCoins] = useState<CoinOption[]>([])
+	const [picked, setPicked] = useState<string | null>(null)
+	const [coinBusy, setCoinBusy] = useState(false)
 	const fileRef = useRef<HTMLInputElement>(null)
 
 	const refresh = useCallback(async () => {
@@ -71,6 +75,42 @@ export function OrderClient({ initial, payResult }: { initial: PublicOrder; payR
 	}, [live, refresh])
 
 	const copy = async (k: string, v: string) => { if (await copyText(v)) { setCopied(k); setTimeout(() => setCopied(null), 1500) } }
+
+	const p = o.payment
+	const waitingProof = o.status === "PENDING" && p && p.status === "PENDING"
+	const inReview = p?.status === "REVIEW"
+	const rejected = p?.status === "REJECTED"
+	const cryptoStep = !!waitingProof && o.next.type === "usdt"
+	const currentAsset = (o.next.type === "usdt" ? o.next.assetId ?? null : null) ?? picked
+
+	// coin list with a freshly calculated amount for each wallet
+	useEffect(() => {
+		if (!cryptoStep) return
+		let alive = true
+		api<{ options: CoinOption[]; selected: string | null }>(`/api/shop/order/${o.token}/asset`)
+			.then((r) => {
+				if (!alive) return
+				setCoins(r.options ?? [])
+				setPicked((prev) => prev ?? r.selected)
+			})
+			.catch(() => { /* the single configured wallet still works */ })
+		return () => { alive = false }
+	}, [cryptoStep, o.token])
+
+	async function pickCoin(assetId: string) {
+		if (assetId === currentAsset || coinBusy) return
+		setCoinBusy(true)
+		setMsg(null)
+		try {
+			const updated = await api<PublicOrder>(`/api/shop/order/${o.token}/asset`, { method: "POST", json: { assetId } })
+			if (updated) setO(updated)
+			setPicked(assetId)
+		} catch (err) {
+			setMsg({ kind: "err", text: err instanceof Error ? err.message : "تغییر ارز ناموفق بود" })
+		} finally {
+			setCoinBusy(false)
+		}
+	}
 
 	async function sendTxid(e: FormEvent) {
 		e.preventDefault()
@@ -110,10 +150,6 @@ export function OrderClient({ initial, payResult }: { initial: PublicOrder; payR
 	}
 
 	const style = { "--brand-primary": o.store.brand.primaryColor, "--brand-accent": o.store.brand.accentColor } as React.CSSProperties
-	const p = o.payment
-	const waitingProof = o.status === "PENDING" && p && p.status === "PENDING"
-	const inReview = p?.status === "REVIEW"
-	const rejected = p?.status === "REJECTED"
 
 	return (
 		<div className="relative min-h-dvh px-4 py-8" style={style} dir="rtl">
@@ -158,17 +194,48 @@ export function OrderClient({ initial, payResult }: { initial: PublicOrder; payR
 					</section>
 				)}
 
-				{/* pay: USDT */}
-				{waitingProof && o.next.type === "usdt" && (
+				{/* pay: crypto */}
+				{cryptoStep && o.next.type === "usdt" && (
 					<form onSubmit={sendTxid} className="fade-up glass space-y-4 p-5">
+						{coins.length > 1 && (
+							<div className="space-y-2">
+								<div className="flex items-center gap-2 text-xs text-muted"><Coins className="h-4 w-4" /> ارز و شبکهٔ دلخواه خود را انتخاب کنید {coinBusy && <Loader2 className="h-3 w-3 spin" />}</div>
+								<div className="grid grid-cols-2 gap-2">
+									{coins.map((c) => (
+										<button
+											key={c.assetId}
+											type="button"
+											disabled={coinBusy || !!c.error}
+											onClick={() => pickCoin(c.assetId)}
+											className={`glass-2 rounded-xl p-3 text-start transition ${c.assetId === currentAsset ? "neon-ring" : "hover:bg-white/5"} ${c.error ? "opacity-50" : ""}`}
+										>
+											<div className="flex items-center justify-between">
+												<span className="font-semibold">{c.symbol}</span>
+												{c.assetId === currentAsset && <Check className="h-4 w-4 text-success" />}
+											</div>
+											<div className="text-[11px] text-muted">{c.label || c.networkLabel}</div>
+											<div className="num mono mt-1 text-xs">{c.error ? "ناموجود" : `${c.amount} ${c.symbol}`}</div>
+										</button>
+									))}
+								</div>
+							</div>
+						)}
 						<div className="text-center">
-							<div className="text-sm text-muted">مبلغ <b className="num neon-text text-lg">{o.next.amountUsdt} USDT</b> را در شبکهٔ <b>{o.next.network}</b> به آدرس زیر ارسال کنید</div>
-							<div className="my-3 flex justify-center"><QR value={o.next.address} size={160} /></div>
-							<div className="flex items-center gap-2">
+							<div className="text-sm text-muted">مبلغ <b className="num neon-text text-lg">{o.next.amountUsdt} {o.next.symbol ?? "USDT"}</b> را در شبکهٔ <b>{o.next.networkLabel ?? o.next.network}</b> به آدرس زیر ارسال کنید</div>
+							<div className="mt-3 flex items-center gap-2">
 								<input readOnly dir="ltr" value={o.next.address} className="input mono flex-1 text-xs" onFocus={(e) => e.currentTarget.select()} />
 								<button type="button" className="btn" onClick={() => copy("addr", (o.next as { address: string }).address)}>{copied === "addr" ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}</button>
 							</div>
-							<p className="mt-2 text-[11px] text-muted">نرخ: {fa(o.next.rate)} تومان · مبلغ را دقیق واریز کنید. فقط شبکه TRC20.</p>
+							{o.next.memo && (
+								<div className="mt-2 space-y-1">
+									<div className="text-[11px] text-warning">این شبکه ممو/تگ لازم دارد — بدون آن تراکنش گم می‌شود</div>
+									<div className="flex items-center gap-2">
+										<input readOnly dir="ltr" value={o.next.memo} className="input mono flex-1 text-xs" onFocus={(e) => e.currentTarget.select()} />
+										<button type="button" className="btn" onClick={() => copy("memo", String((o.next as { memo?: string | null }).memo ?? ""))}>{copied === "memo" ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}</button>
+									</div>
+								</div>
+							)}
+							<p className="mt-2 text-[11px] text-muted">نرخ لحظه‌ای: {fa(o.next.rate)} تومان به ازای هر {o.next.symbol ?? "USDT"} · مبلغ را دقیق و فقط در همین شبکه واریز کنید.</p>
 						</div>
 						<label className="label">هش تراکنش (TXID)<input className="input mono mt-1" dir="ltr" required minLength={20} value={txid} onChange={(e) => setTxid(e.target.value.trim())} placeholder="a1b2c3…" /></label>
 						<button type="submit" className="btn btn-primary w-full" disabled={busy}>{busy ? <Loader2 className="h-4 w-4 spin" /> : <Send className="h-4 w-4" />} من پرداخت کردم</button>
@@ -221,7 +288,7 @@ export function OrderClient({ initial, payResult }: { initial: PublicOrder; payR
 					<div className="flex justify-between"><span className="text-muted">پلن</span><span>{o.plan.name}</span></div>
 					<div className="flex justify-between"><span className="text-muted">حجم / مدت / کاربر</span><span className="num">{o.plan.trafficGB ? `${fa(o.plan.trafficGB)} GB` : "نامحدود"} · {o.plan.days ? `${fa(o.plan.days)} روز` : "نامحدود"} · {o.plan.ipLimit ? fa(o.plan.ipLimit) : "∞"}</span></div>
 					{Number(o.discountAmount) > 0 && <div className="flex justify-between text-success"><span>تخفیف</span><span className="num">−{fa(o.discountAmount)}</span></div>}
-					<div className="flex justify-between border-t border-white/10 pt-2 font-bold"><span>مبلغ</span><span className="num">{fa(o.amount)} تومان{p?.amountUsdt ? <span className="ms-2 text-xs text-muted">≈ {p.amountUsdt} USDT</span> : null}</span></div>
+					<div className="flex justify-between border-t border-white/10 pt-2 font-bold"><span>مبلغ</span><span className="num">{fa(o.amount)} تومان{p?.amountUsdt ? <span className="ms-2 text-xs text-muted">≈ {p.amountUsdt} {o.next.type === "usdt" ? o.next.symbol ?? "USDT" : "USDT"}</span> : null}</span></div>
 					{(o.status === "CANCELED" || o.status === "EXPIRED") && <a href={o.store.url} className="btn w-full mt-2">سفارش جدید</a>}
 				</section>
 
