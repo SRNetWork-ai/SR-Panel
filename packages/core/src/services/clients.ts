@@ -1,14 +1,15 @@
 import { randomUUID } from "node:crypto"
 import { prisma, type Admin, type Client, type Server } from "@srpanel/db"
-import type { ProvisionClientInput } from "../panels/types"
-import { randomToken, shortId } from "../security/token"
+import type { InboundProtocol, ProvisionClientInput } from "../panels/types"
+import { randomToken } from "../security/token"
 import { resolveFlow } from "../subscription/links"
-import { daysFromNow, gbToBytes } from "../util/bytes"
+import { bytesToGb, daysFromNow, gbToBytes } from "../util/bytes"
 import { AppError, ForbiddenError, NotFoundError } from "../util/errors"
+import { configLabel, remoteSubId, sanitizeConfigName } from "../util/naming"
 import { audit } from "./audit"
 import { adapterFor, inboundsOf, recomputeClient } from "./servers"
+import { resolveServiceTargets } from "./services"
 import { assertAffordable, chargeWallet, quoteClientCost } from "./wallet"
-import { bytesToGb } from "../util/bytes"
 
 export interface ClientTarget {
 	serverId: string
@@ -17,6 +18,10 @@ export interface ClientTarget {
 
 export interface CreateClientInput {
 	name: string
+	/** Optional prefix shown before every config name of this client */
+	tag?: string | null
+	/** Provision from an owner-defined service instead of hand-picking inbounds */
+	serviceId?: string | null
 	/** GB, 0 = unlimited */
 	trafficGB: number
 	/** days from now, 0 = never */
@@ -25,11 +30,12 @@ export interface CreateClientInput {
 	note?: string
 	telegramId?: string
 	phone?: string
-	targets: ClientTarget[]
+	targets?: ClientTarget[]
 }
 
 export interface UpdateClientInput {
 	name?: string
+	tag?: string | null
 	trafficGB?: number
 	/** absolute ISO date or null for never */
 	expiresAt?: string | null
@@ -48,10 +54,9 @@ const clientInclude = {
 	servers: { include: { server: { select: { id: true, name: true, status: true } } } },
 } as const
 
-function slugify(name: string): string {
-	const s = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 20)
-	return s || "client"
-}
+/** Panels answer "already in use" / "duplicate" when an email or subId is taken. */
+const COLLISION = /(in use|already|exists?|duplicate|تکرار|موجود)/i
+const PANEL_ATTEMPTS = 4
 
 export function isOwner(actor: Pick<Admin, "role">): boolean {
 	return actor.role === "OWNER"
@@ -71,7 +76,19 @@ export function subscriptionUrl(client: Pick<Client, "subToken">, publicUrl = pr
 	return `${publicUrl.replace(/\/+$/, "")}/sub/${client.subToken}`
 }
 
-function provisionInput(client: Client, remoteEmail: string, flow: string): ProvisionClientInput {
+/** Drops duplicates/garbage and orders the list so the email suffixes stay stable. */
+function normalizeTargets(list: ClientTarget[]): ClientTarget[] {
+	const out: ClientTarget[] = []
+	for (const t of list) {
+		const serverId = String(t?.serverId ?? "")
+		const inboundId = Number(t?.inboundId)
+		if (!serverId || !Number.isFinite(inboundId)) continue
+		if (!out.some((x) => x.serverId === serverId && x.inboundId === inboundId)) out.push({ serverId, inboundId })
+	}
+	return out.sort((a, b) => (a.serverId === b.serverId ? a.inboundId - b.inboundId : a.serverId < b.serverId ? -1 : 1))
+}
+
+function provisionInput(client: Client, remoteEmail: string, flow: string, subId: string): ProvisionClientInput {
 	return {
 		uuid: client.uuid,
 		email: remoteEmail,
@@ -79,10 +96,41 @@ function provisionInput(client: Client, remoteEmail: string, flow: string): Prov
 		expiryTimeMs: client.expiresAt ? client.expiresAt.getTime() : 0,
 		limitIp: client.ipLimit,
 		enable: client.status !== "DISABLED",
-		subId: client.subToken.slice(0, 16),
+		subId,
 		flow,
 		tgId: client.telegramId ?? "",
 	}
+}
+
+/**
+ * Adds one inbound of a client to its panel.
+ *
+ * 3x-ui rejects a client whose subId or email is already taken; the subId is
+ * unique per inbound by construction, but two customers may well carry the same
+ * name, so on a collision we retry with a fresh salt / a numeric suffix instead
+ * of leaving the target unprovisioned.
+ */
+async function addToPanel(server: Server, inboundId: number, protocol: InboundProtocol, client: Client, baseEmail: string, flow: string): Promise<string> {
+	let email = baseEmail
+	let last: unknown
+	for (let attempt = 0; attempt < PANEL_ATTEMPTS; attempt++) {
+		const subId = remoteSubId(client.subToken, server.id, inboundId, attempt ? `r${attempt}` : "")
+		try {
+			await adapterFor(server).addClient(inboundId, protocol, provisionInput(client, email, flow, subId))
+			return email
+		} catch (err) {
+			last = err
+			const message = err instanceof Error ? err.message : String(err)
+			if (!COLLISION.test(message)) throw err
+			if (/sub\s*id/i.test(message)) continue
+			if (/e-?mail/i.test(message)) {
+				email = `${baseEmail}-${attempt + 2}`
+				continue
+			}
+			throw err
+		}
+	}
+	throw last instanceof Error ? last : new AppError(`ساخت کانفیگ روی ${server.name} ناموفق بود`)
 }
 
 async function assertQuota(admin: Admin, extraBytes: bigint, targets: ClientTarget[], excludeClientId?: string): Promise<void> {
@@ -111,14 +159,16 @@ async function assertQuota(admin: Admin, extraBytes: bigint, targets: ClientTarg
 }
 
 export async function createClient(actor: Admin, input: CreateClientInput): Promise<{ client: ClientWithServers; errors: string[] }> {
-	const name = input.name.trim()
-	if (!name) throw new AppError("نام کلاینت لازم است")
-	if (!input.targets.length) throw new AppError("حداقل یک سرور/اینباند انتخاب کنید")
+	if (!input.name.trim()) throw new AppError("نام کلاینت لازم است")
+	const name = sanitizeConfigName(input.name)
+	const tag = sanitizeConfigName(input.tag, "") || null
+	const targets = input.serviceId ? await resolveServiceTargets(actor, input.serviceId) : normalizeTargets(input.targets ?? [])
+	if (!targets.length) throw new AppError("یک سرویس یا دست‌کم یک اینباند انتخاب کنید")
 	const limitBytes = BigInt(gbToBytes(Math.max(0, input.trafficGB)))
-	await assertQuota(actor, limitBytes, input.targets)
+	await assertQuota(actor, limitBytes, targets)
 	const cost = await quoteClientCost(actor, input.trafficGB, input.days)
 	await assertAffordable(actor, cost)
-	const serverIds = [...new Set(input.targets.map((t) => t.serverId))]
+	const serverIds = [...new Set(targets.map((t) => t.serverId))]
 	const servers = await prisma.server.findMany({ where: { id: { in: serverIds }, isActive: true } })
 	if (servers.length !== serverIds.length) throw new AppError("یکی از سرورها در دسترس نیست")
 
@@ -126,6 +176,8 @@ export async function createClient(actor: Admin, input: CreateClientInput): Prom
 		data: {
 			adminId: actor.id,
 			name,
+			tag,
+			serviceId: input.serviceId || null,
 			uuid: randomUUID(),
 			subToken: randomToken(18),
 			trafficLimit: limitBytes,
@@ -137,28 +189,38 @@ export async function createClient(actor: Admin, input: CreateClientInput): Prom
 		},
 	})
 	if (cost > 0n) await chargeWallet(actor, -cost, "PURCHASE", { refType: "client", refId: client.id, note: `ساخت کلاینت ${name}` })
-	const short = shortId(6)
+
+	// the name the operator typed (with the tag in front) is what the panel shows
+	const label = configLabel(client)
+	const perServer = new Map<string, number>()
 	const errors: string[] = []
-	for (const t of input.targets) {
+	for (const t of targets) {
 		const server = servers.find((s) => s.id === t.serverId)!
-		const multi = input.targets.filter((x) => x.serverId === t.serverId).length > 1
-		const remoteEmail = multi ? `${slugify(name)}-${short}-${t.inboundId}` : `${slugify(name)}-${short}`
+		const seen = perServer.get(t.serverId) ?? 0
+		perServer.set(t.serverId, seen + 1)
+		// one panel cannot hold the same email twice, so extra inbounds get -2, -3, …
+		const baseEmail = seen === 0 ? label : `${label}-${seen + 1}`
 		const inbound = inboundsOf(server).find((i) => i.id === t.inboundId)
-		const link = await prisma.clientServer.create({ data: { clientId: client.id, serverId: server.id, inboundId: t.inboundId, remoteEmail } })
+		const link = await prisma.clientServer.create({ data: { clientId: client.id, serverId: server.id, inboundId: t.inboundId, remoteEmail: baseEmail } })
 		try {
 			const flow = inbound ? resolveFlow(inbound, client.uuid) : ""
-			await adapterFor(server).addClient(t.inboundId, inbound?.protocol ?? "vless", provisionInput(client, remoteEmail, flow))
+			const remoteEmail = await addToPanel(server, t.inboundId, inbound?.protocol ?? "vless", client, baseEmail, flow)
+			if (remoteEmail !== baseEmail) await prisma.clientServer.update({ where: { id: link.id }, data: { remoteEmail } })
 		} catch (err) {
 			const message = err instanceof Error ? err.message : String(err)
 			errors.push(`${server.name}: ${message}`)
 			await prisma.clientServer.update({ where: { id: link.id }, data: { lastError: message.slice(0, 300) } })
 		}
 	}
-	await audit(actor.id, "client.create", client.id, { name, targets: input.targets.length, errors: errors.length })
+	await audit(actor.id, "client.create", client.id, { name, tag, serviceId: input.serviceId ?? null, targets: targets.length, errors: errors.length })
 	return { client: await getClientForActor(actor, client.id), errors }
 }
 
-/** Pushes the current DB state of a client to every server it lives on. */
+/**
+ * Pushes the current DB state of a client to every server it lives on.
+ * The remote email is kept as created — renaming it on the panel would detach
+ * the traffic counters that 3x-ui keys by email.
+ */
 export async function pushClient(client: ClientWithServers): Promise<string[]> {
 	const errors: string[] = []
 	const servers = await prisma.server.findMany({ where: { id: { in: client.servers.map((s) => s.serverId) } } })
@@ -168,7 +230,8 @@ export async function pushClient(client: ClientWithServers): Promise<string[]> {
 		const inbound = inboundsOf(server).find((i) => i.id === link.inboundId)
 		try {
 			const flow = inbound ? resolveFlow(inbound, client.uuid) : ""
-			await adapterFor(server).updateClient(link.inboundId, inbound?.protocol ?? "vless", provisionInput(client, link.remoteEmail, flow))
+			const subId = remoteSubId(client.subToken, link.serverId, link.inboundId)
+			await adapterFor(server).updateClient(link.inboundId, inbound?.protocol ?? "vless", provisionInput(client, link.remoteEmail, flow, subId))
 			await prisma.clientServer.update({ where: { id: link.id }, data: { lastError: null } })
 		} catch (err) {
 			const message = err instanceof Error ? err.message : String(err)
@@ -183,10 +246,10 @@ export async function updateClient(actor: Admin, id: string, input: UpdateClient
 	const current = await getClientForActor(actor, id)
 	const data: Record<string, unknown> = {}
 	if (input.name !== undefined) {
-		const name = input.name.trim()
-		if (!name) throw new AppError("نام کلاینت لازم است")
-		data.name = name
+		if (!input.name.trim()) throw new AppError("نام کلاینت لازم است")
+		data.name = sanitizeConfigName(input.name)
 	}
+	if (input.tag !== undefined) data.tag = sanitizeConfigName(input.tag, "") || null
 	if (input.trafficGB !== undefined) {
 		const bytes = BigInt(gbToBytes(Math.max(0, input.trafficGB)))
 		await assertQuota(actor, bytes, [], current.id)
@@ -264,7 +327,7 @@ export async function deleteClient(actor: Admin, id: string): Promise<string[]> 
 export async function listClients(actor: Admin, opts: { q?: string; status?: string; take?: number; skip?: number } = {}) {
 	const where: Record<string, unknown> = { ...clientScope(actor) }
 	if (opts.status && opts.status !== "ALL") where.status = opts.status
-	if (opts.q) where.OR = [{ name: { contains: opts.q, mode: "insensitive" } }, { note: { contains: opts.q, mode: "insensitive" } }, { phone: { contains: opts.q } }, { telegramId: { contains: opts.q } }]
+	if (opts.q) where.OR = [{ name: { contains: opts.q, mode: "insensitive" } }, { tag: { contains: opts.q, mode: "insensitive" } }, { note: { contains: opts.q, mode: "insensitive" } }, { phone: { contains: opts.q } }, { telegramId: { contains: opts.q } }]
 	const [items, total] = await Promise.all([
 		prisma.client.findMany({ where, include: clientInclude, orderBy: { createdAt: "desc" }, take: Math.min(opts.take ?? 100, 500), skip: opts.skip ?? 0 }),
 		prisma.client.count({ where }),

@@ -3,9 +3,9 @@
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { useEffect, useMemo, useState, type FormEvent } from "react"
-import { Copy, Pencil, Plus, QrCode, RotateCcw, Search, Trash2, UserPlus } from "lucide-react"
+import { Copy, Layers, Pencil, Plus, QrCode, RotateCcw, Search, Trash2, UserPlus } from "lucide-react"
 import { ApiError, api, copyText } from "@/lib/client"
-import type { ClientDto, ServerDto } from "@/lib/dto"
+import type { ClientDto, ServerDto, ServiceDto } from "@/lib/dto"
 import { daysLeft, formatBytes, percent, relativeTime } from "@/lib/format"
 import { useLocale, useT } from "@/lib/i18n"
 import { QR } from "@/components/QR"
@@ -13,12 +13,22 @@ import { Badge, Button, Card, Empty, Field, Input, Modal, PageHeader, Progress, 
 
 const STATUSES = ["", "ACTIVE", "EXPIRED", "LIMITED", "DISABLED"] as const
 
-type Form = { name: string; trafficGB: number; days: number; ipLimit: number; note: string; phone: string; telegramId: string; targets: Array<{ serverId: string; inboundId: number }> }
-const emptyForm: Form = { name: "", trafficGB: 50, days: 30, ipLimit: 0, note: "", phone: "", telegramId: "", targets: [] }
+type Mode = "service" | "manual"
+type Form = { name: string; tag: string; serviceId: string; mode: Mode; trafficGB: number; days: number; ipLimit: number; note: string; phone: string; telegramId: string; targets: Array<{ serverId: string; inboundId: number }> }
+const emptyForm: Form = { name: "", tag: "", serviceId: "", mode: "manual", trafficGB: 50, days: 30, ipLimit: 0, note: "", phone: "", telegramId: "", targets: [] }
 
-export function ClientsClient({ initial, servers, openNew, isOwner }: { initial: { items: ClientDto[]; total: number }; servers: ServerDto[]; openNew: boolean; isOwner: boolean }) {
+/** Mirrors configLabel() in @srpanel/core so the operator sees the real x-ui name. */
+function labelPreview(name: string, tag: string): string {
+	const n = name.trim()
+	const g = tag.trim()
+	if (!g) return n
+	return /[-_.|:/\u2022]$/.test(g) ? `${g}${n}` : `${g}-${n}`
+}
+
+export function ClientsClient({ initial, servers, services, openNew, isOwner }: { initial: { items: ClientDto[]; total: number }; servers: ServerDto[]; services: ServiceDto[]; openNew: boolean; isOwner: boolean }) {
 	const t = useT()
 	const locale = useLocale()
+	const L = (fa: string, en: string) => (locale === "fa" ? fa : en)
 	const toast = useToast()
 	const confirm = useConfirm()
 	const router = useRouter()
@@ -28,9 +38,12 @@ export function ClientsClient({ initial, servers, openNew, isOwner }: { initial:
 	const [q, setQ] = useState("")
 	const [status, setStatus] = useState<string>("")
 	const [loading, setLoading] = useState(false)
+	const hasServices = services.length > 0
 	const firstTargets = () => servers.flatMap((s) => s.inbounds.filter((i) => i.enable).slice(0, 1).map((i) => ({ serverId: s.id, inboundId: i.id }))).slice(0, 1)
+	/* services are the friendly path: preselect the first one when any exists */
+	const newForm = (): Form => (hasServices ? { ...emptyForm, mode: "service", serviceId: services[0].id } : { ...emptyForm, mode: "manual", targets: firstTargets() })
 	const [modal, setModal] = useState<"new" | ClientDto | null>(openNew ? "new" : null)
-	const [form, setForm] = useState<Form>(() => (openNew ? { ...emptyForm, targets: firstTargets() } : emptyForm))
+	const [form, setForm] = useState<Form>(() => (openNew ? newForm() : emptyForm))
 	const [busy, setBusy] = useState(false)
 	const [qr, setQr] = useState<ClientDto | null>(null)
 
@@ -54,11 +67,23 @@ export function ClientsClient({ initial, servers, openNew, isOwner }: { initial:
 	}, [q, status])
 
 	const openCreate = () => {
-		setForm({ ...emptyForm, targets: firstTargets() })
+		setForm(newForm())
 		setModal("new")
 	}
 	const openEdit = (c: ClientDto) => {
-		setForm({ name: c.name, trafficGB: Math.round((c.trafficLimit / 1024 ** 3) * 100) / 100, days: 0, ipLimit: c.ipLimit, note: c.note ?? "", phone: c.phone ?? "", telegramId: c.telegramId ?? "", targets: c.servers.map((s) => ({ serverId: s.serverId, inboundId: s.inboundId })) })
+		setForm({
+			name: c.name,
+			tag: c.tag ?? "",
+			serviceId: c.serviceId ?? "",
+			mode: c.serviceId ? "service" : "manual",
+			trafficGB: Math.round((c.trafficLimit / 1024 ** 3) * 100) / 100,
+			days: 0,
+			ipLimit: c.ipLimit,
+			note: c.note ?? "",
+			phone: c.phone ?? "",
+			telegramId: c.telegramId ?? "",
+			targets: c.servers.map((s) => ({ serverId: s.serverId, inboundId: s.inboundId })),
+		})
 		setModal(c)
 	}
 	const toggleTarget = (serverId: string, inboundId: number) =>
@@ -67,14 +92,30 @@ export function ClientsClient({ initial, servers, openNew, isOwner }: { initial:
 			return { ...f, targets: has ? f.targets.filter((x) => !(x.serverId === serverId && x.inboundId === inboundId)) : [...f.targets, { serverId, inboundId }] }
 		})
 
+	const creating = modal === "new"
+	const serviceMode = hasServices && form.mode === "service"
+	const selectedService = services.find((s) => s.id === form.serviceId) ?? null
+	const showManualPicker = !creating || !serviceMode
+	const incomplete = creating && (serviceMode ? !form.serviceId : form.targets.length === 0)
+
 	const submit = async (e: FormEvent) => {
 		e.preventDefault()
 		setBusy(true)
 		try {
-			if (modal === "new") {
+			if (creating) {
 				const r = await api<{ client: ClientDto; errors: string[] }>("/api/clients", {
 					method: "POST",
-					json: { name: form.name.trim(), trafficGB: Number(form.trafficGB), days: Number(form.days), ipLimit: Number(form.ipLimit), note: form.note || null, phone: form.phone || null, telegramId: form.telegramId || null, targets: form.targets },
+					json: {
+						name: form.name.trim(),
+						tag: form.tag.trim() || null,
+						trafficGB: Number(form.trafficGB),
+						days: Number(form.days),
+						ipLimit: Number(form.ipLimit),
+						note: form.note || null,
+						phone: form.phone || null,
+						telegramId: form.telegramId || null,
+						...(serviceMode ? { serviceId: form.serviceId } : { targets: form.targets }),
+					},
 				})
 				setItems((l) => [r.client, ...l])
 				setTotal((n) => n + 1)
@@ -85,7 +126,7 @@ export function ClientsClient({ initial, servers, openNew, isOwner }: { initial:
 			} else if (modal) {
 				const r = await api<{ client: ClientDto; errors: string[] }>(`/api/clients/${modal.id}`, {
 					method: "PATCH",
-					json: { name: form.name.trim(), trafficGB: Number(form.trafficGB), addDays: Number(form.days) || undefined, ipLimit: Number(form.ipLimit), note: form.note || null, phone: form.phone || null, telegramId: form.telegramId || null },
+					json: { name: form.name.trim(), tag: form.tag.trim() || null, trafficGB: Number(form.trafficGB), addDays: Number(form.days) || undefined, ipLimit: Number(form.ipLimit), note: form.note || null, phone: form.phone || null, telegramId: form.telegramId || null },
 				})
 				setItems((l) => l.map((x) => (x.id === r.client.id ? r.client : x)))
 				if (r.errors.length) toast.err(`${t("cl_partial_error")} ${r.errors.join(" | ")}`)
@@ -133,6 +174,7 @@ export function ClientsClient({ initial, servers, openNew, isOwner }: { initial:
 	}
 
 	const serverMap = useMemo(() => new Map(servers.map((s) => [s.id, s])), [servers])
+	const serviceMap = useMemo(() => new Map(services.map((s) => [s.id, s])), [services])
 
 	return (
 		<div>
@@ -172,10 +214,15 @@ export function ClientsClient({ initial, servers, openNew, isOwner }: { initial:
 									const used = c.usedUp + c.usedDown
 									const pct = c.trafficLimit > 0 ? percent(used, c.trafficLimit) : 0
 									const dl = daysLeft(c.expiresAt)
+									const svc = c.serviceId ? serviceMap.get(c.serviceId) : undefined
 									return (
 										<tr key={c.id}>
 											<td>
-												<Link href={`/clients/${c.id}`} className="font-medium hover:text-violet-soft">{c.name}</Link>
+												<div className="flex flex-wrap items-center gap-1.5">
+													{c.tag && <Badge tone="violet">{c.tag}</Badge>}
+													<Link href={`/clients/${c.id}`} className="font-medium hover:text-violet-soft">{c.name}</Link>
+												</div>
+												{svc && <div className="text-[11px] text-muted">{svc.name}</div>}
 												{c.note && <div className="max-w-48 truncate text-[11px] text-muted">{c.note}</div>}
 											</td>
 											<td><StatusBadge status={c.status} /></td>
@@ -212,13 +259,21 @@ export function ClientsClient({ initial, servers, openNew, isOwner }: { initial:
 			</Card>
 
 			{/* create / edit */}
-			<Modal open={modal !== null} onClose={() => setModal(null)} title={modal === "new" ? t("cl_add") : t("cl_edit")} wide footer={<Button variant="primary" type="submit" form="client-form" loading={busy} disabled={modal === "new" && form.targets.length === 0}>{modal === "new" ? t("create") : t("save")}</Button>}>
+			<Modal open={modal !== null} onClose={() => setModal(null)} title={creating ? t("cl_add") : t("cl_edit")} wide footer={<Button variant="primary" type="submit" form="client-form" loading={busy} disabled={incomplete}>{creating ? t("create") : t("save")}</Button>}>
 				<form id="client-form" onSubmit={submit} className="grid gap-4 md:grid-cols-2">
 					<div className="space-y-3">
-						<Field label={t("name")}><Input value={form.name} onChange={(e) => set("name", e.target.value)} required placeholder={t("cl_name_ph")} /></Field>
+						<div className="grid gap-3 sm:grid-cols-[1fr_9rem]">
+							<Field label={t("name")}><Input value={form.name} onChange={(e) => set("name", e.target.value)} required placeholder={t("cl_name_ph")} /></Field>
+							<Field label={L("تگ", "Tag")}><Input value={form.tag} onChange={(e) => set("tag", e.target.value)} maxLength={24} placeholder={L("مثلاً SR", "e.g. SR")} /></Field>
+						</div>
+						<p className="text-[11px] text-muted">
+							{L("نام کانفیگ روی پنل: ", "Config name on the panel: ")}
+							<span className="mono text-violet-soft" dir="ltr">{labelPreview(form.name, form.tag) || "—"}</span>
+						</p>
+						{!creating && <p className="text-[11px] text-warning">{L("کانفیگ‌هایی که قبلاً ساخته شده‌اند نامشان روی x-ui تغییر نمی‌کند (مصرف ثبت‌شده گم می‌شود)؛ نام جدید در لینک اشتراک دیده می‌شود.", "Already-created configs keep their x-ui name (renaming would drop their traffic counters); the new name shows up in the subscription.")}</p>}
 						<div className="grid grid-cols-2 gap-3">
 							<Field label={t("cl_traffic_gb")}><Input type="number" min={0} step="0.5" value={form.trafficGB} onChange={(e) => set("trafficGB", Number(e.target.value))} /></Field>
-							<Field label={modal === "new" ? t("cl_days") : t("cl_extend_days")}><Input type="number" min={modal === "new" ? 0 : -3650} value={form.days} onChange={(e) => set("days", Number(e.target.value))} /></Field>
+							<Field label={creating ? t("cl_days") : t("cl_extend_days")}><Input type="number" min={creating ? 0 : -3650} value={form.days} onChange={(e) => set("days", Number(e.target.value))} /></Field>
 						</div>
 						<div className="flex flex-wrap gap-1.5">
 							{[10, 30, 50, 100, 200].map((g) => <button key={g} type="button" className={cx("badge cursor-pointer", form.trafficGB === g ? "badge-violet" : "badge-muted")} onClick={() => set("trafficGB", g)}>{g} GB</button>)}
@@ -235,31 +290,68 @@ export function ClientsClient({ initial, servers, openNew, isOwner }: { initial:
 					</div>
 
 					<div>
-						<div className="label">{t("cl_targets")}</div>
-						<p className="mb-2 text-[11px] text-muted">{t("cl_targets_hint")}</p>
-						{modal !== "new" && <p className="mb-2 text-[11px] text-warning">{t("cl_servers")}: {form.targets.map((x) => serverMap.get(x.serverId)?.name ?? x.serverId).join(", ") || "—"}</p>}
-						<div className="scrollbar-thin max-h-80 space-y-2 overflow-y-auto pe-1">
-							{servers.length === 0 && <p className="text-xs text-muted">{t("srv_empty")}</p>}
-							{servers.map((s) => (
-								<div key={s.id} className="glass glass-2 p-3">
-									<div className="mb-2 flex items-center justify-between">
-										<span className="text-sm font-medium">{s.name}</span>
-										<StatusBadge status={s.status} />
-									</div>
-									<div className="flex flex-wrap gap-1.5">
-										{s.inbounds.length === 0 && <span className="text-[11px] text-muted">—</span>}
-										{s.inbounds.map((i) => {
-											const on = form.targets.some((x) => x.serverId === s.id && x.inboundId === i.id)
-											return (
-												<button key={i.id} type="button" disabled={modal !== "new" || !i.enable} onClick={() => toggleTarget(s.id, i.id)} className={cx("badge cursor-pointer disabled:cursor-default disabled:opacity-60", on ? "badge-violet" : "badge-muted")}>
-													{i.protocol}:{i.port}{i.remark ? ` • ${i.remark}` : ""}{i.security !== "none" ? ` • ${i.security}` : ""}
-												</button>
-											)
-										})}
-									</div>
+						{hasServices && (creating || !!form.serviceId) && (
+							<div className={cx("mb-4", showManualPicker && "border-b pb-4")}>
+								<div className="label flex items-center gap-1.5">
+									<Layers className="h-3.5 w-3.5 text-violet-soft" />
+									{L("سرویس", "Service")}
 								</div>
-							))}
-						</div>
+								<p className="mb-2 text-[11px] text-muted">{L("سرویس مجموعه‌ای از اینباندهاست که مالک تعریف کرده؛ کافی‌ست همین را انتخاب کنید.", "A service is an owner-defined bundle of inbounds - just pick one.")}</p>
+								<Select value={form.serviceId} onChange={(e) => set("serviceId", e.target.value)} disabled={!creating || !serviceMode}>
+									<option value="">{L("— انتخاب سرویس —", "- pick a service -")}</option>
+									{services.map((s) => (
+										<option key={s.id} value={s.id}>{s.name}</option>
+									))}
+								</Select>
+								{selectedService && (
+									<div className="mt-2 space-y-1">
+										{selectedService.description && <p className="text-[11px] text-muted">{selectedService.description}</p>}
+										{selectedService.targets.map((x) => (
+											<div key={x.serverId + ":" + x.inboundId} className="flex items-center justify-between gap-2 text-[11px]">
+												<span className="truncate text-muted">{x.serverName}</span>
+												<span className="mono truncate" dir="ltr">{x.inboundLabel}</span>
+											</div>
+										))}
+										<p className="pt-1 text-[11px] text-muted">{selectedService.targets.length + " " + L("کانفیگ ساخته می‌شود", "configs will be created")}</p>
+									</div>
+								)}
+								{creating && isOwner && (
+									<button type="button" className="mt-3 text-[11px] text-violet-soft hover:underline" onClick={() => set("mode", serviceMode ? "manual" : "service")}>
+										{serviceMode ? L("انتخاب دستی اینباندها", "Pick inbounds manually") : L("انتخاب از روی سرویس", "Use a service instead")}
+									</button>
+								)}
+							</div>
+						)}
+
+						{showManualPicker && (
+							<>
+								<div className="label">{t("cl_targets")}</div>
+								<p className="mb-2 text-[11px] text-muted">{t("cl_targets_hint")}</p>
+								{!creating && <p className="mb-2 text-[11px] text-warning">{t("cl_servers")}: {form.targets.map((x) => serverMap.get(x.serverId)?.name ?? x.serverId).join(", ") || "—"}</p>}
+								<div className="scrollbar-thin max-h-80 space-y-2 overflow-y-auto pe-1">
+									{servers.length === 0 && <p className="text-xs text-muted">{t("srv_empty")}</p>}
+									{servers.map((s) => (
+										<div key={s.id} className="glass glass-2 p-3">
+											<div className="mb-2 flex items-center justify-between">
+												<span className="text-sm font-medium">{s.name}</span>
+												<StatusBadge status={s.status} />
+											</div>
+											<div className="flex flex-wrap gap-1.5">
+												{s.inbounds.length === 0 && <span className="text-[11px] text-muted">—</span>}
+												{s.inbounds.map((i) => {
+													const on = form.targets.some((x) => x.serverId === s.id && x.inboundId === i.id)
+													return (
+														<button key={i.id} type="button" disabled={!creating || !i.enable} onClick={() => toggleTarget(s.id, i.id)} className={cx("badge cursor-pointer disabled:cursor-default disabled:opacity-60", on ? "badge-violet" : "badge-muted")}>
+															{i.protocol}:{i.port}{i.remark ? ` • ${i.remark}` : ""}{i.security !== "none" ? ` • ${i.security}` : ""}
+														</button>
+													)
+												})}
+											</div>
+										</div>
+									))}
+								</div>
+							</>
+						)}
 					</div>
 				</form>
 			</Modal>
