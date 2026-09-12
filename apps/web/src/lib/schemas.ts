@@ -30,6 +30,8 @@ export const createClientSchema = z
 		serviceId: z.string().min(1).max(64).nullable().optional(),
 		trafficGB: z.number().min(0).max(1_000_000),
 		days: z.number().int().min(0).max(36500),
+		/** count `days` from the customer's first connection instead of from now */
+		startAfterUse: z.boolean().optional(),
 		ipLimit: z.number().int().min(0).max(1000).optional(),
 		note: z.string().max(500).nullable().optional(),
 		telegramId: z.string().max(64).nullable().optional(),
@@ -184,6 +186,8 @@ export const resellerPricingSchema = z.object({
 export const topupSchema = z.object({
 	amount: z.number().int().min(1000).max(1e12),
 	method: paymentMethodSchema,
+	/** crypto asset id when method = USDT (defaults to the first enabled asset) */
+	assetId: z.string().max(40).nullable().optional(),
 })
 
 export const proofSchema = z.object({
@@ -197,6 +201,8 @@ export const reviewSchema = z.object({ note: z.string().max(300).nullable().opti
 export const shopOrderSchema = z.object({
 	planId: z.string().min(1).max(64),
 	method: paymentMethodSchema,
+	/** which coin/network the buyer picked for a crypto payment */
+	assetId: z.string().max(40).nullable().optional(),
 	name: z.string().max(60).nullable().optional(),
 	telegramId: z.string().max(24).nullable().optional(),
 	phone: z.string().max(24).nullable().optional(),
@@ -225,6 +231,33 @@ export const fxSettingsInput = z
 		customUnit: z.enum(["IRT", "IRR"]),
 	})
 	.partial()
+
+/* ---------- multi-coin crypto checkout ---------- */
+export const cryptoNetworkSchema = z.enum(["TRC20", "BEP20", "ERC20", "TON", "SOL", "POLYGON", "ARBITRUM", "AVAX", "BTC", "LTC", "DOGE", "XMR", "OTHER"])
+
+/** One receiving wallet: a coin on a specific network. */
+export const cryptoAssetInput = z.object({
+	id: z.string().max(40).optional(),
+	/** coin symbol, e.g. USDT / TON / TRX */
+	symbol: z.string().trim().min(2).max(12),
+	network: cryptoNetworkSchema,
+	address: z.string().trim().min(8).max(200),
+	/** TON / EXMO style payment id */
+	memo: z.string().trim().max(120).nullable().optional(),
+	label: z.string().trim().max(60).nullable().optional(),
+	enabled: z.boolean().optional(),
+	/** USDT = priced by the seller's USDT rate, MARKET = live coin price, FIXED = manual */
+	rateMode: z.enum(["USDT", "MARKET", "FIXED"]).optional(),
+	/** IRT per 1 coin, used when rateMode = FIXED */
+	fixedRate: z.number().min(0).max(1e12).optional(),
+	/** extra margin on top of the coin price (%) */
+	marginPct: z.number().min(-50).max(200).optional(),
+	/** decimals shown to the buyer */
+	decimals: z.number().int().min(0).max(8).optional(),
+})
+
+/** PUT /api/store/crypto */
+export const cryptoAssetsInput = z.object({ assets: z.array(cryptoAssetInput).max(20) })
 
 /* ---------- card-to-card auto verification ---------- */
 export const cardAutoInput = z
