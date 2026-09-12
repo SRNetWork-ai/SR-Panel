@@ -155,7 +155,7 @@ export async function marketRate(symbol: string): Promise<{ rate: number; source
 			// handled below
 		}
 	}
-	if (!rate) throw new AppError("قیمت لحطه‌ای " + sym + " در دسترس نیست؛ برای این ارز نرخ ثابت وارد کنید")
+	if (!rate) throw new AppError("قیمت لحظه‌ای " + sym + " در دسترس نیست؛ برای این ارز نرخ ثابت وارد کنید")
 	await setSetting(cacheKey, coinCacheSchema, { rate, at: new Date().toISOString(), source })
 	return { rate, source }
 }
