@@ -1,6 +1,7 @@
 import { prisma, type Admin, type Payment, type PaymentKind, type PaymentMethod, type StoreSettings } from "@srpanel/db"
 import { AppError, ForbiddenError, NotFoundError } from "../util/errors"
 import { audit } from "./audit"
+import { cryptoMetaOf, isTrc20Usdt, quoteCrypto } from "./cryptoAssets"
 import { fulfillOrder } from "./fulfillment"
 import { notify } from "./notifications"
 import { brandName, getTelegramSettings, panelUrl } from "./settings"
@@ -15,7 +16,19 @@ import { zarinpalRequest, zarinpalVerify } from "./zarinpal"
 export { cancelOrder, fulfillOrder, retryFulfill } from "./fulfillment"
 
 export type PaymentNext =
-	| { type: "usdt"; address: string; network: string; amountUsdt: string; rate: number }
+	| {
+			type: "usdt"
+			address: string
+			network: string
+			amountUsdt: string
+			rate: number
+			/** multi-coin extras — optional so older callers keep compiling */
+			symbol?: string
+			networkLabel?: string
+			memo?: string | null
+			label?: string | null
+			assetId?: string
+	  }
 	| { type: "card"; cardNumber: string; cardHolder: string | null; cardBank: string | null }
 	| { type: "redirect"; url: string }
 	| { type: "review" }
@@ -48,6 +61,8 @@ export interface BeginPaymentInput {
 	description: string
 	mobile?: string | null
 	email?: string | null
+	/** crypto wallet (coin + network) the payer picked */
+	assetId?: string | null
 }
 
 export async function beginPayment(s: StoreSettings, input: BeginPaymentInput): Promise<{ payment: Payment; next: PaymentNext }> {
@@ -56,9 +71,13 @@ export async function beginPayment(s: StoreSettings, input: BeginPaymentInput): 
 	const expiresAt = new Date(Date.now() + s.paymentTtlMin * 60_000)
 	const base = { kind: input.kind, method: input.method, amount: input.amount, adminId: input.adminId, orderId: input.orderId ?? null, expiresAt }
 	if (input.method === "USDT") {
-		const amountUsdt = usdtAmountFor(input.amount, s.usdtRate)
-		const payment = await prisma.payment.create({ data: { ...base, amountUsdt } })
-		return { payment, next: { type: "usdt", address: s.usdtAddress!, network: s.usdtNetwork, amountUsdt, rate: s.usdtRate } }
+		// the rate is recalculated here on every single payment — no manual refresh button
+		const q = await quoteCrypto(s, input.amount, input.assetId ?? null)
+		const payment = await prisma.payment.create({ data: { ...base, amountUsdt: q.amount, meta: { crypto: q } as any } })
+		return {
+			payment,
+			next: { type: "usdt", address: q.address, network: q.network, networkLabel: q.networkLabel, amountUsdt: q.amount, rate: q.rateIrt, symbol: q.symbol, memo: q.memo, label: q.label, assetId: q.assetId },
+		}
 	}
 	if (input.method === "CARD") {
 		const payment = await prisma.payment.create({ data: base })
@@ -93,7 +112,13 @@ export function paymentNext(p: Payment, s: StoreSettings | null): PaymentNext {
 	if (p.status === "REVIEW") return { type: "review" }
 	if (p.status !== "PENDING") return { type: "none" }
 	if (p.expiresAt && p.expiresAt.getTime() < Date.now()) return { type: "none" }
-	if (p.method === "USDT" && s?.usdtAddress) return { type: "usdt", address: s.usdtAddress, network: s.usdtNetwork, amountUsdt: p.amountUsdt ?? usdtAmountFor(p.amount, s.usdtRate), rate: s.usdtRate }
+	if (p.method === "USDT") {
+		const q = cryptoMetaOf(p)
+		if (q) {
+			return { type: "usdt", address: q.address, network: q.network, networkLabel: q.networkLabel, amountUsdt: p.amountUsdt ?? q.amount, rate: q.rateIrt, symbol: q.symbol, memo: q.memo, label: q.label, assetId: q.assetId }
+		}
+		if (s?.usdtAddress) return { type: "usdt", address: s.usdtAddress, network: s.usdtNetwork, networkLabel: s.usdtNetwork, symbol: "USDT", amountUsdt: p.amountUsdt ?? usdtAmountFor(p.amount, s.usdtRate), rate: s.usdtRate }
+	}
 	if (p.method === "CARD" && s?.cardNumber) return { type: "card", cardNumber: s.cardNumber, cardHolder: s.cardHolder, cardBank: s.cardBank }
 	if (p.method === "ZARINPAL") {
 		const url = (p.meta as { startUrl?: string } | null)?.startUrl
@@ -138,8 +163,11 @@ export async function submitProof(paymentId: string, proof: PaymentProof): Promi
 		const dup = await prisma.payment.findUnique({ where: { txid } })
 		if (dup && dup.id !== p.id) throw new AppError("این TXID قبلاّ برای پرداخت دیگری ثبت شده است")
 		let updated = await prisma.payment.update({ where: { id: p.id }, data: { txid, status: "REVIEW", error: null, meta: { ...((p.meta as object) ?? {}), verify: "pending", tries: 0 } } })
-		if (s?.usdtAutoVerify && s.usdtAddress) {
-			const r = await verifyTrc20Payment(txid, s.usdtAddress, Number(p.amountUsdt ?? usdtAmountFor(p.amount, s.usdtRate)))
+		const q = cryptoMetaOf(p)
+		const address = q?.address ?? s?.usdtAddress ?? null
+		// only USDT on Tron can be checked on-chain; other coins go to manual review
+		if (s?.usdtAutoVerify && address && isTrc20Usdt(q)) {
+			const r = await verifyTrc20Payment(txid, address, Number(p.amountUsdt ?? usdtAmountFor(p.amount, s.usdtRate)))
 			if (r.ok) return confirmPayment(p.id, { auto: true, note: `USDT ${r.amount} تأیید خودکار` })
 			updated = await prisma.payment.update({ where: { id: p.id }, data: { error: r.error ?? null, meta: { ...((updated.meta as object) ?? {}), verify: r.status, tries: 1, amountSeen: r.amount ?? null } } })
 		}
@@ -162,7 +190,9 @@ export async function submitProof(paymentId: string, proof: PaymentProof): Promi
 async function announceReview(p: Payment): Promise<void> {
 	const r = await reviewerId(p)
 	const kindFa = p.kind === "ORDER" ? "سفارش" : "شارژ کیف پول"
-	const text = `🧾 <b>پرداخت در انتظار بررسی</b> (${kindFa})\nمبلغ: <b>${fmtIrt(p.amount)}</b> تومان — روش: ${p.method}${p.txid ? `\nTXID: <code>${tgEscape(p.txid)}</code>` : ""}${p.receiptRef ? `\nپیگیری: <code>${tgEscape(p.receiptRef)}</code>` : ""}${p.error ? `\n⚠️ ${tgEscape(p.error)}` : ""}\n\nبررسی: ${panelUrl()}/orders?tab=payments`
+	const coin = cryptoMetaOf(p)
+	const coinLine = coin ? `\nارز: <b>${tgEscape(coin.amount)} ${tgEscape(coin.symbol)}</b> — ${tgEscape(coin.networkLabel)}` : ""
+	const text = `🧾 <b>پرداخت در انتظار بررسی</b> (${kindFa})\nمبلغ: <b>${fmtIrt(p.amount)}</b> تومان — روش: ${p.method}${coinLine}${p.txid ? `\nTXID: <code>${tgEscape(p.txid)}</code>` : ""}${p.receiptRef ? `\nپیگیری: <code>${tgEscape(p.receiptRef)}</code>` : ""}${p.error ? `\n⚠️ ${tgEscape(p.error)}` : ""}\n\nبررسی: ${panelUrl()}/orders?tab=payments`
 	await notify("payment.review", text, { dedupeKey: `payrev:${p.id}:${p.updatedAt.getTime()}`, targetId: p.id, recipients: r })
 	await emitEvent(p.kind === "ORDER" ? p.adminId : null, "payment.review", { paymentId: p.id, kind: p.kind, method: p.method, amount: p.amount.toString(), txid: p.txid, receiptRef: p.receiptRef })
 }
@@ -220,14 +250,14 @@ export async function rejectPayment(actor: Admin, paymentId: string, note?: stri
 }
 
 /* ---------- top-ups (reseller -> owner) ---------- */
-export async function createTopup(actor: Admin, input: { amount: number; method: PaymentMethod }): Promise<{ payment: Payment; next: PaymentNext }> {
+export async function createTopup(actor: Admin, input: { amount: number; method: PaymentMethod; assetId?: string | null }): Promise<{ payment: Payment; next: PaymentNext }> {
 	if (actor.role === "OWNER") throw new AppError("مالک پنل نیازی به شارژ کیف پول ندارد")
 	const amount = Math.round(input.amount)
 	if (!Number.isFinite(amount) || amount < 1000) throw new AppError("حداقل مبلغ شارژ ۱۰۰۰ تومان است")
 	const owner = await ownerAdmin()
 	const s = await storeSettingsByAdminId(owner.id)
 	if (!s || !enabledMethods(s).length) throw new AppError("روش پرداختی برای شارژ کیف پول تنظیم نشده است (مالک باید روش‌های پرداخت فروشگاه خود را فعال کند)")
-	const r = await beginPayment(s, { kind: "TOPUP", method: input.method, amount: BigInt(amount), adminId: actor.id, description: `شارژ کیف پول ${actor.username} — ${brandName()}` })
+	const r = await beginPayment(s, { kind: "TOPUP", method: input.method, amount: BigInt(amount), adminId: actor.id, assetId: input.assetId ?? null, description: `شارژ کیف پول ${actor.username} — ${brandName()}` })
 	await audit(actor.id, "wallet.topup_request", r.payment.id, { amount, method: input.method })
 	return r
 }
@@ -305,9 +335,12 @@ export async function verifyPendingUsdt(): Promise<number> {
 	for (const p of items) {
 		const meta = (p.meta as { verify?: string; tries?: number } | null) ?? {}
 		if (meta.verify === "mismatch" || (meta.tries ?? 0) >= 40) continue
+		const q = cryptoMetaOf(p)
+		if (!isTrc20Usdt(q)) continue
 		const s = await settingsForPayment(p)
-		if (!s?.usdtAutoVerify || !s.usdtAddress) continue
-		const r = await verifyTrc20Payment(p.txid!, s.usdtAddress, Number(p.amountUsdt ?? usdtAmountFor(p.amount, s.usdtRate)))
+		const address = q?.address ?? s?.usdtAddress ?? null
+		if (!s?.usdtAutoVerify || !address) continue
+		const r = await verifyTrc20Payment(p.txid!, address, Number(p.amountUsdt ?? usdtAmountFor(p.amount, s.usdtRate)))
 		if (r.ok) {
 			await confirmPayment(p.id, { auto: true, note: `USDT ${r.amount} تأیید خودکار` })
 			confirmed++
