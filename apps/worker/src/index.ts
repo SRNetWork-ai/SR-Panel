@@ -6,6 +6,8 @@ process.env.TZ ??= process.env.SRP_TZ || "Asia/Tehran"
 import { Cron } from "croner"
 import { prisma } from "@srpanel/db"
 import {
+	autoRefreshRates,
+	autoSyncBankDeposits,
 	backupDueNow,
 	dispatchWebhooks,
 	enforceClientStatuses,
@@ -79,6 +81,26 @@ async function webhooks() {
 	}
 }
 
+/** AUTO pricing: keeps each seller's cached USDT rate inside its TTL. */
+async function refreshRates() {
+	try {
+		const n = await autoRefreshRates()
+		if (n) log(`fx: refreshed ${n} seller rate(s)`)
+	} catch (err) {
+		warn("fx refresh failed", err)
+	}
+}
+
+/** Card-to-card auto verification through the optional bank bridge. */
+async function bankDeposits() {
+	try {
+		const n = await autoSyncBankDeposits()
+		if (n) log(`bank: synced ${n} seller statement(s)`)
+	} catch (err) {
+		warn("bank sync failed", err)
+	}
+}
+
 async function main() {
 	await ensureOwner()
 	log(`started (sync every ${INTERVAL}s, TZ=${process.env.TZ})`)
@@ -92,12 +114,16 @@ async function main() {
 		// stage 2B — store
 		new Cron("30 * * * * *", { protect: true }, () => expirePayments().then((n) => n && log(`expired ${n} payment(s)`)).catch((err) => warn("expirePayments failed", err))),
 		new Cron("10 */2 * * * *", { protect: true }, () => verifyPendingUsdt().then((n) => n && log(`auto-confirmed ${n} USDT payment(s)`)).catch((err) => warn("verifyPendingUsdt failed", err))),
+		// automatic FX rate + card-to-card bank bridge
+		new Cron("20 */2 * * * *", { protect: true }, refreshRates),
+		new Cron("40 */2 * * * *", { protect: true }, bankDeposits),
 	]
 	const botAbort = new AbortController()
 	const bot = pollTelegram(botAbort.signal, log).catch((err) => warn("telegram bot stopped", err))
 
 	await syncAll()
 	await enforce()
+	await refreshRates()
 
 	const stop = async () => {
 		log("stopping…")
