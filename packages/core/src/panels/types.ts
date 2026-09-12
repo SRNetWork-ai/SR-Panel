@@ -139,9 +139,11 @@ export interface PanelAdapter {
 	getStatus(): Promise<PanelServerStatus>
 	listInbounds(): Promise<PanelInbound[]>
 	listInboundOptions(): Promise<PanelInboundOption[]>
-	addClient(inboundId: number, protocol: InboundProtocol, client: ProvisionClientInput): Promise<void>
-	updateClient(inboundId: number, protocol: InboundProtocol, client: ProvisionClientInput): Promise<void>
-	deleteClient(inboundId: number, protocol: InboundProtocol, client: { uuid: string; email: string }): Promise<void>
+	/** One client may be attached to several inbounds of the same panel (3X-UI v3). */
+	addClient(inboundIds: number | number[], protocol: InboundProtocol, client: ProvisionClientInput): Promise<void>
+	/** The id list is the client's inbound membership - always send every inbound it must stay on. */
+	updateClient(inboundIds: number | number[], protocol: InboundProtocol, client: ProvisionClientInput): Promise<void>
+	deleteClient(inboundIds: number | number[], protocol: InboundProtocol, client: { uuid: string; email: string }): Promise<void>
 	resetClientTraffic(inboundId: number, email: string): Promise<void>
 	getOnlineEmails(): Promise<string[]>
 	getClientLinks(email: string): Promise<string[]>
