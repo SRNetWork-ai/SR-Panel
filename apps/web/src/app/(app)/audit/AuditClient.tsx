@@ -1,30 +1,28 @@
 "use client"
 
-import { useEffect, useState } from "react"
-import { ChevronLeft, ChevronRight, Search } from "lucide-react"
+import { useEffect, useMemo, useState } from "react"
+import { ChevronLeft, ChevronRight, Download, RefreshCw, Search } from "lucide-react"
+import { Button, Card, Field, Input, PageHeader, Select, Spinner, cx } from "@/components/ui"
 import { api } from "@/lib/client"
-import { formatDate } from "@/lib/format"
+import { formatNumber } from "@/lib/format"
 import { useLocale, useT } from "@/lib/i18n"
-import { Badge, Button, Card, Empty, Input, PageHeader, Spinner } from "@/components/ui"
-
-type Row = { id: string; at: string; actor: string | null; action: string; target: string | null; meta: unknown; ip: string | null }
-const TAKE = 50
-
-function tone(action: string): "success" | "warning" | "danger" | "muted" | "violet" | "cyan" {
-	if (action.endsWith("delete") || action.endsWith("login_failed") || action.endsWith("totp_disabled")) return "danger"
-	if (action.endsWith("create") || action.endsWith("totp_enabled")) return "success"
-	if (action.startsWith("auth.")) return "cyan"
-	if (action.endsWith("reset_traffic")) return "warning"
-	return "violet"
-}
+import { AuditTable } from "./AuditTable"
+import { CATEGORIES, PAGE_SIZES, csvOf, tr, type AuditResponse, type AuditRow, type Facet } from "./types"
 
 export function AuditClient() {
 	const t = useT()
 	const locale = useLocale()
-	const [rows, setRows] = useState<Row[]>([])
+	const L = (fa: string, en: string) => tr(locale, fa, en)
+	const [rows, setRows] = useState<AuditRow[]>([])
+	const [facets, setFacets] = useState<Facet[]>([])
 	const [total, setTotal] = useState(0)
 	const [q, setQ] = useState("")
+	const [category, setCategory] = useState("")
+	const [from, setFrom] = useState("")
+	const [to, setTo] = useState("")
+	const [take, setTake] = useState(50)
 	const [page, setPage] = useState(0)
+	const [tick, setTick] = useState(0)
 	const [loading, setLoading] = useState(true)
 
 	useEffect(() => {
@@ -32,62 +30,143 @@ export function AuditClient() {
 		const h = setTimeout(async () => {
 			setLoading(true)
 			try {
-				const r = await api<{ items: Row[]; total: number }>(`/api/audit?q=${encodeURIComponent(q)}&take=${TAKE}&skip=${page * TAKE}`)
+				const sp = new URLSearchParams({ take: String(take), skip: String(page * take) })
+				if (q.trim()) sp.set("q", q.trim())
+				if (category) sp.set("category", category)
+				if (from) sp.set("from", from)
+				if (to) sp.set("to", to)
+				const r = await api<AuditResponse>(`/api/audit?${sp.toString()}`)
 				if (!alive) return
 				setRows(r.items)
 				setTotal(r.total)
+				setFacets(r.facets)
 			} finally {
 				if (alive) setLoading(false)
 			}
 		}, q ? 300 : 0)
-		return () => { alive = false; clearTimeout(h) }
-	}, [q, page])
+		return () => {
+			alive = false
+			clearTimeout(h)
+		}
+	}, [q, category, from, to, take, page, tick])
 
-	const pages = Math.max(1, Math.ceil(total / TAKE))
+	const pages = Math.max(1, Math.ceil(total / take))
+	const dirty = Boolean(q || category || from || to)
+	const chips = useMemo(() => [{ id: "", count: facets.reduce((s, f) => s + f.count, 0) }, ...facets], [facets])
+	const label = (id: string) => {
+		if (!id) return t("all")
+		const c = CATEGORIES[id]
+		return c ? tr(locale, c[0], c[1]) : id
+	}
+
+	const pick = (id: string) => {
+		setCategory(id)
+		setPage(0)
+	}
+
+	const exportCsv = () => {
+		const blob = new Blob([csvOf(rows)], { type: "text/csv;charset=utf-8" })
+		const url = URL.createObjectURL(blob)
+		const a = document.createElement("a")
+		a.href = url
+		a.download = `audit-${new Date().toISOString().slice(0, 10)}.csv`
+		a.click()
+		URL.revokeObjectURL(url)
+	}
 
 	return (
-		<div>
-			<PageHeader title={t("au_title")} subtitle={t("au_sub")} />
-			<div className="mb-4 flex items-center gap-2">
-				<div className="relative flex-1">
-					<Search className="pointer-events-none absolute inset-y-0 start-3 my-auto h-4 w-4 text-muted" />
-					<Input className="ps-10" placeholder={t("search")} value={q} onChange={(e) => { setQ(e.target.value); setPage(0) }} />
+		<div className="space-y-4">
+			<PageHeader
+				title={t("au_title")}
+				subtitle={t("au_sub")}
+				actions={
+					<>
+						<Button type="button" variant="ghost" onClick={() => setTick((x) => x + 1)} loading={loading}>
+							<RefreshCw className="h-4 w-4" />
+							{t("refresh")}
+						</Button>
+						<Button type="button" onClick={exportCsv} disabled={rows.length === 0}>
+							<Download className="h-4 w-4" />
+							CSV
+						</Button>
+					</>
+				}
+			/>
+
+			<Card bodyClassName="space-y-3">
+				<div className="flex flex-wrap items-end gap-2">
+					<div className="relative min-w-52 flex-1">
+						<Search className="pointer-events-none absolute inset-y-0 start-3 my-auto h-4 w-4 text-muted" />
+						<Input
+							className="ps-10"
+							placeholder={L("جستجو در رویداد، هدف، کاربر یا IP…", "Search action, target, actor or IP…")}
+							value={q}
+							onChange={(e) => {
+								setQ(e.target.value)
+								setPage(0)
+							}}
+						/>
+					</div>
+					<Field label={L("از تاریخ", "From")} className="w-36">
+						<Input type="date" className="text-start" value={from} onChange={(e) => { setFrom(e.target.value); setPage(0) }} />
+					</Field>
+					<Field label={L("تا تاریخ", "To")} className="w-36">
+						<Input type="date" className="text-start" value={to} onChange={(e) => { setTo(e.target.value); setPage(0) }} />
+					</Field>
+					<Select
+						className="w-auto"
+						value={take}
+						onChange={(e) => {
+							setTake(Number(e.target.value))
+							setPage(0)
+						}}
+					>
+						{PAGE_SIZES.map((n) => (
+							<option key={n} value={n}>
+								{L(`${formatNumber(n, locale)} ردیف`, `${n} rows`)}
+							</option>
+						))}
+					</Select>
+					{dirty && (
+						<Button
+							type="button"
+							variant="ghost"
+							onClick={() => {
+								setQ("")
+								setCategory("")
+								setFrom("")
+								setTo("")
+								setPage(0)
+							}}
+						>
+							{L("پاک کردن فیلترها", "Clear filters")}
+						</Button>
+					)}
 				</div>
-				{loading && <Spinner />}
-			</div>
+				<div className="flex flex-wrap gap-1.5">
+					{chips.map((c) => (
+						<button key={c.id || "all"} type="button" onClick={() => pick(c.id)} className={cx("chip", category === c.id && "chip-on")}>
+							{label(c.id)}
+							<span className="num text-[10px] text-muted">{formatNumber(c.count, locale)}</span>
+						</button>
+					))}
+				</div>
+			</Card>
 
 			<Card bodyClassName="px-0 pb-0">
-				{rows.length === 0 && !loading ? <Empty /> : (
-					<div className="table-wrap">
-						<table className="table">
-							<thead><tr><th>{t("au_time")}</th><th>{t("au_actor")}</th><th>{t("au_action")}</th><th>{t("au_target")}</th><th>IP</th><th>{t("au_meta")}</th></tr></thead>
-							<tbody>
-								{rows.map((r) => (
-									<tr key={r.id}>
-										<td className="num whitespace-nowrap text-xs">{formatDate(r.at, locale, true)}</td>
-										<td className="mono text-xs">{r.actor ?? <span className="text-muted">system</span>}</td>
-										<td><Badge tone={tone(r.action)}>{r.action}</Badge></td>
-										<td className="mono max-w-56 truncate text-xs">{r.target ?? "—"}</td>
-										<td className="mono text-xs text-muted">{r.ip ?? "—"}</td>
-										<td className="text-xs">
-											{r.meta ? (
-												<details>
-													<summary className="cursor-pointer text-muted">JSON</summary>
-													<pre className="mono mt-1 max-w-md overflow-x-auto whitespace-pre-wrap rounded-lg border border-line bg-surface p-2 text-[10px]" dir="ltr">{JSON.stringify(r.meta, null, 1)}</pre>
-												</details>
-											) : "—"}
-										</td>
-									</tr>
-								))}
-							</tbody>
-						</table>
-					</div>
-				)}
-				<div className="flex items-center justify-between border-t border-line px-4 py-2 text-xs text-muted">
-					<span className="num">{total} • {page + 1}/{pages}</span>
+				<AuditTable rows={rows} loading={loading} />
+				<div className="flex items-center justify-between gap-2 border-t border-line px-4 py-2 text-xs text-muted">
+					<span className="num flex items-center gap-2">
+						{formatNumber(total, locale)} • {formatNumber(page + 1, locale)}/{formatNumber(pages, locale)}
+						{loading && rows.length > 0 && <Spinner className="h-3.5 w-3.5" />}
+					</span>
 					<div className="flex gap-1">
-						<Button size="icon" variant="ghost" disabled={page === 0} onClick={() => setPage((p) => p - 1)}><ChevronRight className="h-4 w-4 ltr:rotate-180" /></Button>
-						<Button size="icon" variant="ghost" disabled={page + 1 >= pages} onClick={() => setPage((p) => p + 1)}><ChevronLeft className="h-4 w-4 ltr:rotate-180" /></Button>
+						<Button size="icon" variant="ghost" type="button" disabled={page === 0} onClick={() => setPage((p) => p - 1)}>
+							<ChevronRight className="h-4 w-4 ltr:rotate-180" />
+						</Button>
+						<Button size="icon" variant="ghost" type="button" disabled={page + 1 >= pages} onClick={() => setPage((p) => p + 1)}>
+							<ChevronLeft className="h-4 w-4 ltr:rotate-180" />
+						</Button>
 					</div>
 				</div>
 			</Card>
