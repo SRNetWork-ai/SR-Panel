@@ -25,6 +25,16 @@ function labelPreview(name: string, tag: string): string {
 	return /[-_.|:/\u2022]$/.test(g) ? `${g}${n}` : `${g}-${n}`
 }
 
+/** Mirrors groupTargets() in @srpanel/core: one panel client per server+protocol, however many inbounds are picked. */
+function configCount(targets: Array<{ serverId: string; inboundId: number }>, servers: ServerDto[]): number {
+	const keys = new Set<string>()
+	for (const t of targets) {
+		const proto = servers.find((s) => s.id === t.serverId)?.inbounds.find((i) => i.id === t.inboundId)?.protocol ?? ""
+		keys.add(`${t.serverId}|${proto}`)
+	}
+	return keys.size
+}
+
 export function ClientsClient({ initial, servers, services, openNew, isOwner }: { initial: { items: ClientDto[]; total: number }; servers: ServerDto[]; services: ServiceDto[]; openNew: boolean; isOwner: boolean }) {
 	const t = useT()
 	const locale = useLocale()
@@ -97,6 +107,9 @@ export function ClientsClient({ initial, servers, services, openNew, isOwner }: 
 	const selectedService = services.find((s) => s.id === form.serviceId) ?? null
 	const showManualPicker = !creating || !serviceMode
 	const incomplete = creating && (serviceMode ? !form.serviceId : form.targets.length === 0)
+	/* one config per server (per protocol) - several inbounds of one server land on a single panel client */
+	const manualConfigs = useMemo(() => configCount(form.targets, servers), [form.targets, servers])
+	const serviceConfigs = selectedService ? new Set(selectedService.targets.map((x) => x.serverId)).size : 0
 
 	const submit = async (e: FormEvent) => {
 		e.preventDefault()
@@ -312,7 +325,7 @@ export function ClientsClient({ initial, servers, services, openNew, isOwner }: 
 												<span className="mono truncate" dir="ltr">{x.inboundLabel}</span>
 											</div>
 										))}
-										<p className="pt-1 text-[11px] text-muted">{selectedService.targets.length + " " + L("کانفیگ ساخته می‌شود", "configs will be created")}</p>
+										<p className="pt-1 text-[11px] text-muted">{L(`${serviceConfigs} کانفیگ از ${selectedService.targets.length} اینباند ساخته می‌شود — اینباندهای یک سرور داخل یک کانفیگ جمع می‌شوند.`, `${serviceConfigs} config(s) from ${selectedService.targets.length} inbounds - inbounds of the same server share one config.`)}</p>
 									</div>
 								)}
 								{creating && isOwner && (
@@ -327,6 +340,9 @@ export function ClientsClient({ initial, servers, services, openNew, isOwner }: 
 							<>
 								<div className="label">{t("cl_targets")}</div>
 								<p className="mb-2 text-[11px] text-muted">{t("cl_targets_hint")}</p>
+								{creating && form.targets.length > 0 && (
+									<p className="mb-2 text-[11px] text-muted">{L(`${manualConfigs} کانفیگ از ${form.targets.length} اینباند ساخته می‌شود — چند اینباند از یک سرور روی یک کانفیگ می‌نشیند.`, `${manualConfigs} config(s) from ${form.targets.length} inbounds - several inbounds of one server share a single config.`)}</p>
+								)}
 								{!creating && <p className="mb-2 text-[11px] text-warning">{t("cl_servers")}: {form.targets.map((x) => serverMap.get(x.serverId)?.name ?? x.serverId).join(", ") || "—"}</p>}
 								<div className="scrollbar-thin max-h-80 space-y-2 overflow-y-auto pe-1">
 									{servers.length === 0 && <p className="text-xs text-muted">{t("srv_empty")}</p>}
