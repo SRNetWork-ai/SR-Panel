@@ -31,6 +31,7 @@
 	--srp-bg: #06060d;
 	--srp-surface: rgba(255, 255, 255, 0.045);
 	--srp-surface-2: rgba(255, 255, 255, 0.075);
+	--srp-solid: #12101f;
 	--srp-line: rgba(255, 255, 255, 0.09);
 	--srp-fg: #f4f4fb;
 	--srp-muted: #9a9ab5;
@@ -43,6 +44,7 @@ html.light {
 	--srp-bg: #f5f5fa;
 	--srp-surface: rgba(255, 255, 255, 0.72);
 	--srp-surface-2: rgba(255, 255, 255, 0.95);
+	--srp-solid: #ffffff;
 	--srp-line: rgba(20, 20, 40, 0.09);
 	--srp-fg: #14142b;
 	--srp-muted: #6b6b8a;
@@ -141,6 +143,29 @@ html.light .aurora {
 .label { @apply block text-xs font-medium mb-1.5; color: var(--srp-muted); }
 .field { @apply space-y-0; }
 
+/* the native popup of a <select> inherits its background-color, so a translucent
+   surface made the dropdown white and unreadable - keep it solid and themed */
+.select {
+	appearance: none;
+	-webkit-appearance: none;
+	background-color: var(--srp-solid);
+	background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%239a9ab5' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+	background-repeat: no-repeat;
+	background-position: left 0.85rem center;
+	background-size: 1rem 1rem;
+	padding-inline-end: 1rem;
+	padding-inline-start: 2.4rem;
+	cursor: pointer;
+}
+html[dir="ltr"] .select { background-position: right 0.85rem center; padding-inline-start: 1rem; padding-inline-end: 2.4rem; }
+.select:hover { border-color: rgba(139, 92, 246, 0.35); }
+.select option, .select optgroup {
+	background: var(--srp-solid);
+	color: var(--srp-fg);
+	padding: 0.35rem 0.5rem;
+}
+.select:disabled { opacity: 0.6; cursor: not-allowed; }
+
 .badge { @apply inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[11px] font-semibold; border: 1px solid transparent; }
 .badge-success { color: #34d399; background: rgba(52, 211, 153, 0.12); border-color: rgba(52, 211, 153, 0.25); }
 .badge-warning { color: #fbbf24; background: rgba(251, 191, 36, 0.12); border-color: rgba(251, 191, 36, 0.25); }
@@ -148,6 +173,24 @@ html.light .aurora {
 .badge-muted { color: var(--srp-muted); background: var(--srp-surface); border-color: var(--srp-line); }
 .badge-violet { color: #a78bfa; background: rgba(139, 92, 246, 0.14); border-color: rgba(139, 92, 246, 0.3); }
 .badge-cyan { color: #22d3ee; background: rgba(34, 211, 238, 0.12); border-color: rgba(34, 211, 238, 0.28); }
+
+/* segmented tabs */
+.seg { @apply flex flex-wrap gap-1 rounded-2xl p-1.5; background: var(--srp-surface); border: 1px solid var(--srp-line); }
+.seg-item { @apply inline-flex items-center gap-2 whitespace-nowrap rounded-xl px-3.5 py-2 text-sm transition; color: var(--srp-muted); border: 1px solid transparent; }
+.seg-item:hover { color: var(--srp-fg); background: var(--srp-surface-2); }
+.seg-item.active { color: var(--srp-fg); background: linear-gradient(135deg, rgba(139, 92, 246, 0.24), rgba(34, 211, 238, 0.12)); border-color: rgba(139, 92, 246, 0.35); }
+
+/* toggleable chip (inbound / service pickers) */
+.chip { @apply inline-flex cursor-pointer items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-semibold transition; border: 1px solid var(--srp-line); background: var(--srp-surface); color: var(--srp-muted); }
+.chip:hover { color: var(--srp-fg); background: var(--srp-surface-2); }
+.chip-on { color: var(--srp-fg); background: rgba(139, 92, 246, 0.22); border-color: rgba(139, 92, 246, 0.45); }
+.chip:disabled { cursor: default; opacity: 0.55; }
+
+/* small inner panel */
+.tile { @apply rounded-xl p-3; background: var(--srp-surface-2); border: 1px solid var(--srp-line); }
+.pick { @apply w-full rounded-xl p-3 text-start transition; background: var(--srp-surface); border: 1px solid var(--srp-line); }
+.pick:hover { background: var(--srp-surface-2); }
+.pick-on { background: rgba(139, 92, 246, 0.12); border-color: rgba(139, 92, 246, 0.45); }
 
 .table-wrap { @apply overflow-x-auto; }
 .table { @apply w-full text-sm; border-collapse: separate; border-spacing: 0; }

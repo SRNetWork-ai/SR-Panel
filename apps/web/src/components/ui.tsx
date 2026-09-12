@@ -123,6 +123,34 @@ export function Stat({ label, value, sub, icon, accent = "violet" }: { label: st
 	)
 }
 
+/* ---------- Tabs (segmented) ---------- */
+export function Tabs<T extends string>({ tabs, value, onChange, className }: { tabs: Array<{ id: T; label: string; icon?: ReactNode; count?: ReactNode }>; value: T; onChange: (id: T) => void; className?: string }) {
+	return (
+		<div className={cx("seg scrollbar-thin overflow-x-auto", className)} role="tablist">
+			{tabs.map((x) => (
+				<button key={x.id} type="button" role="tab" aria-selected={value === x.id} onClick={() => onChange(x.id)} className={cx("seg-item", value === x.id && "active")}>
+					{x.icon}
+					{x.label}
+					{x.count !== undefined && x.count !== null && <span className="badge badge-muted num">{x.count}</span>}
+				</button>
+			))}
+		</div>
+	)
+}
+
+/* ---------- Section heading inside a card ---------- */
+export function SubHead({ title, hint, actions, className }: { title: ReactNode; hint?: ReactNode; actions?: ReactNode; className?: string }) {
+	return (
+		<div className={cx("mb-3 flex flex-wrap items-end justify-between gap-2", className)}>
+			<div>
+				<div className="text-sm font-semibold">{title}</div>
+				{hint && <div className="mt-0.5 text-[11px] text-muted">{hint}</div>}
+			</div>
+			{actions && <div className="flex items-center gap-2">{actions}</div>}
+		</div>
+	)
+}
+
 /* ---------- Empty / Spinner ---------- */
 export function Empty({ text, action }: { text?: string; action?: ReactNode }) {
 	const t = useT()
@@ -139,7 +167,7 @@ export function Spinner({ className }: { className?: string }) {
 }
 
 /* ---------- Modal ---------- */
-export function Modal({ open, onClose, title, children, footer, wide }: { open: boolean; onClose: () => void; title: ReactNode; children: ReactNode; footer?: ReactNode; wide?: boolean }) {
+export function Modal({ open, onClose, title, subtitle, children, footer, wide, size }: { open: boolean; onClose: () => void; title: ReactNode; subtitle?: ReactNode; children: ReactNode; footer?: ReactNode; wide?: boolean; size?: "md" | "lg" | "xl" }) {
 	useEffect(() => {
 		if (!open) return
 		const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose()
@@ -151,17 +179,22 @@ export function Modal({ open, onClose, title, children, footer, wide }: { open: 
 		}
 	}, [open, onClose])
 	if (!open) return null
+	const width = size === "xl" ? "sm:max-w-5xl" : size === "lg" || wide ? "sm:max-w-3xl" : "sm:max-w-lg"
 	return (
 		<div className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 p-0 backdrop-blur-sm sm:items-center sm:p-4" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-			<div className={cx("glass glass-2 fade-up max-h-[92vh] w-full overflow-hidden rounded-b-none sm:rounded-b-[var(--radius-glass)]", wide ? "sm:max-w-3xl" : "sm:max-w-lg")} role="dialog" aria-modal>
-				<header className="flex items-center justify-between border-b px-5 py-3.5">
-					<h3 className="text-sm font-semibold">{title}</h3>
+			{/* flex column + min-h-0 on the body: long forms scroll instead of spilling out of the card */}
+			<div className={cx("glass glass-2 fade-up flex max-h-[92vh] w-full flex-col overflow-hidden rounded-b-none sm:max-h-[88vh] sm:rounded-b-[var(--radius-glass)]", width)} role="dialog" aria-modal>
+				<header className="flex shrink-0 items-start justify-between gap-3 border-b px-5 py-3.5">
+					<div className="min-w-0">
+						<h3 className="truncate text-sm font-semibold">{title}</h3>
+						{subtitle && <p className="mt-0.5 text-[11px] text-muted">{subtitle}</p>}
+					</div>
 					<Button size="icon" variant="ghost" onClick={onClose} aria-label="close">
 						<X className="h-4 w-4" />
 					</Button>
 				</header>
-				<div className="scrollbar-thin max-h-[calc(92vh-8rem)] overflow-y-auto px-5 py-4">{children}</div>
-				{footer && <footer className="flex items-center justify-end gap-2 border-t px-5 py-3">{footer}</footer>}
+				<div className="scrollbar-thin min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 py-4">{children}</div>
+				{footer && <footer className="flex shrink-0 flex-wrap items-center justify-end gap-2 border-t px-5 py-3">{footer}</footer>}
 			</div>
 		</div>
 	)
