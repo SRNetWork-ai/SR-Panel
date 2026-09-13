@@ -7,7 +7,7 @@ import { Copy, Pencil, Plus, QrCode, RotateCcw, Search, Trash2, UserPlus } from 
 import { ApiError, api, copyText } from "@/lib/client"
 import type { ClientDto, ServiceDto } from "@/lib/dto"
 import { daysLeft, formatBytes, percent, relativeTime } from "@/lib/format"
-import { tr, useLocale, useT } from "@/lib/i18n"
+import { useLocale, useT } from "@/lib/i18n"
 import { QR } from "@/components/QR"
 import { Badge, Button, Card, Empty, Input, Modal, PageHeader, Progress, Select, StatusBadge, cx, useConfirm, useToast } from "@/components/ui"
 import { ClientForm } from "./ClientForm"
@@ -17,7 +17,7 @@ const STATUSES = ["", "ACTIVE", "EXPIRED", "LIMITED", "DISABLED"] as const
 export function ClientsClient({ initial, services, openNew, isOwner }: { initial: { items: ClientDto[]; total: number }; services: ServiceDto[]; openNew: boolean; isOwner: boolean }) {
 	const t = useT()
 	const locale = useLocale()
-	const L = (fa: string, en: string) => tr(locale, fa, en)
+	const L = (fa: string, en: string) => (locale === "fa" ? fa : en)
 	const toast = useToast()
 	const confirm = useConfirm()
 	const router = useRouter()
