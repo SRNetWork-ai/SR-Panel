@@ -43,6 +43,8 @@ export * from "./services/customers"
 export * from "./services/storeCustomerPay"
 // in-panel updates
 export * from "./services/updates"
+// stage 3 — advanced server management (detail view + bulk sync)
+export * from "./services/serverAdmin"
 // automatic FX pricing (named exports only: generic helper names stay module-local)
 export {
 	FX_SOURCES,
