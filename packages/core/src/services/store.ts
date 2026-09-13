@@ -1,12 +1,13 @@
-import { prisma, type Admin, type Brand, type Order, type Payment, type PaymentMethod, type Plan, type Server, type StoreSettings } from "@srpanel/db"
+import { prisma, type Admin, type Brand, type Customer, type Order, type Payment, type PaymentMethod, type Plan, type Server, type StoreSettings } from "@srpanel/db"
 import { randomToken } from "../security/token"
 import { AppError, NotFoundError } from "../util/errors"
 import { audit } from "./audit"
 import { cardAutoSettings, rematchDeposits, uniqueCardAmount } from "./cardAuto"
 import { subscriptionUrl } from "./clients"
+import { creditCustomerWallet, debitCustomerWallet } from "./customers"
 import { effectiveUsdtRate } from "./fx"
 import { notify } from "./notifications"
-import { beginPayment, fulfillOrder, paymentNext, type PaymentNext, type PlanSnapshot } from "./payments"
+import { beginPayment, confirmPayment, fulfillOrder, paymentNext, type PaymentNext, type PlanSnapshot } from "./payments"
 import { applyDiscount, planServiceId, planTargets, planTargetsFresh } from "./plans"
 import { brandName, panelUrl } from "./settings"
 import { cleanStorePage, storePage, type StorePage } from "./storePage"
@@ -51,6 +52,16 @@ export interface PublicBrand {
 	supportUrl: string | null
 }
 
+/** Storefront account/wallet capabilities the buyer UI needs to know about. */
+export interface PublicStoreAccounts {
+	enabled: boolean
+	guestCheckout: boolean
+	walletEnabled: boolean
+	minTopup: string
+	topupBonusPct: number
+	requireEmail: boolean
+}
+
 export interface PublicStore {
 	slug: string
 	title: string
@@ -68,6 +79,9 @@ export interface PublicStore {
 	fx: { auto: boolean; source: string; at: string | null; stale: boolean }
 	/** card-to-card orders are confirmed automatically */
 	cardAutoVerify: boolean
+	accounts: PublicStoreAccounts
+	announcement: string | null
+	termsUrl: string | null
 	page: StorePage
 	stats: { plans: number; locations: number; sold: number }
 	plans: PublicPlan[]
@@ -109,6 +123,17 @@ export async function getStoreByHost(host: string | null | undefined): Promise<S
 	if (!brand) return null
 	const s = await prisma.storeSettings.findUnique({ where: { adminId: brand.adminId }, include: { admin: { include: { brand: true } } } })
 	return ctxOf(s)
+}
+
+export function publicStoreAccounts(s: StoreSettings): PublicStoreAccounts {
+	return {
+		enabled: s.accountsEnabled,
+		guestCheckout: s.guestCheckout,
+		walletEnabled: s.accountsEnabled && s.walletEnabled,
+		minTopup: s.minTopup.toString(),
+		topupBonusPct: s.topupBonusPct,
+		requireEmail: s.requireEmail,
+	}
 }
 
 /**
@@ -168,6 +193,9 @@ export async function publicStorePayload(ctx: StoreContext): Promise<PublicStore
 		paymentTtlMin: ctx.settings.paymentTtlMin,
 		fx: { auto: fx.auto, source: fx.source, at: fx.at, stale: fx.stale },
 		cardAutoVerify: card.mode !== "MANUAL" && card.autoConfirm,
+		accounts: publicStoreAccounts(ctx.settings),
+		announcement: ctx.settings.announcement,
+		termsUrl: ctx.settings.termsUrl,
 		page: cleanStorePage(page),
 		stats: { plans: publicPlans.length, locations: new Set(publicPlans.flatMap((p) => p.locations)).size, sold: plans.reduce((sum, p) => sum + p.sold, 0) },
 		plans: publicPlans,
@@ -191,6 +219,8 @@ export interface CreateOrderInput {
 	/** subToken of an existing client to renew */
 	renewToken?: string | null
 	ip?: string | null
+	/** storefront account placing the order (required for WALLET) */
+	customerId?: string | null
 }
 
 export interface CreateOrderResult {
@@ -206,10 +236,16 @@ export async function createOrder(slug: string, input: CreateOrderInput): Promis
 	const { settings: s, admin: seller } = ctx
 	const plan = await prisma.plan.findFirst({ where: { id: input.planId, adminId: seller.id, isActive: true } })
 	if (!plan) throw new NotFoundError("پلن پیدا نشد")
-	const telegramId = (input.customer.telegramId ?? "").replace(/[^0-9]/g, "").slice(0, 20) || null
-	const phone = (input.customer.phone ?? "").replace(/[^0-9+]/g, "").slice(0, 20) || null
-	const email = (input.customer.email ?? "").trim().slice(0, 120) || null
-	const name = (input.customer.name ?? "").trim().slice(0, 60) || null
+	let account: Customer | null = null
+	if (input.customerId) {
+		account = await prisma.customer.findFirst({ where: { id: input.customerId, adminId: seller.id, status: "ACTIVE" } })
+		if (!account) throw new AppError("حساب مشتری معتبر نیست؛ دوباره وارد شوید", 401, "login_required")
+	}
+	if (!account && !s.guestCheckout) throw new AppError("برای خرید از این فروشگاه باید وارد حساب کاربری شوید", 401, "login_required")
+	const telegramId = ((input.customer.telegramId ?? "").replace(/[^0-9]/g, "").slice(0, 20) || account?.telegramId) ?? null
+	const phone = ((input.customer.phone ?? "").replace(/[^0-9+]/g, "").slice(0, 20) || account?.phone) ?? null
+	const email = ((input.customer.email ?? "").trim().slice(0, 120) || account?.email) ?? null
+	const name = ((input.customer.name ?? "").trim().slice(0, 60) || account?.name) ?? null
 	if (s.requireTelegram && !telegramId) throw new AppError("شناسه عددی تلگرام لازم است")
 	if (s.requirePhone && !phone) throw new AppError("شماره موبایل لازم است")
 	if (input.ip) {
@@ -231,6 +267,14 @@ export async function createOrder(slug: string, input: CreateOrderInput): Promis
 		const unique = await uniqueCardAmount(seller.id, Number(amount))
 		if (Number.isFinite(unique) && unique > Number(amount)) amount = BigInt(unique)
 	}
+	const payFromWallet = input.method === "WALLET" && amount > 0n
+	if (payFromWallet) {
+		if (!account) throw new AppError("برای پرداخت از کیف پول باید وارد حساب کاربری شوید", 401, "login_required")
+		if (!s.accountsEnabled || !s.walletEnabled) throw new AppError("کیف پول در این فروشگاه فعال نیست", 403, "wallet_disabled")
+		if (account.credit < amount) throw new AppError("موجودی کیف پول کافی نیست؛ ابتدا کیف پول را شارژ کنید", 400, "insufficient_funds")
+	} else if (amount > 0n && !enabledMethods(s).includes(input.method)) {
+		throw new AppError("این روش پرداخت فعال نیست")
+	}
 	// the service behind the plan may have gained/lost inbounds since it was created
 	const targets = await planTargetsFresh(plan)
 	const snapshot: PlanSnapshot = { name: plan.name, trafficGB: plan.trafficGB, days: plan.days, ipLimit: plan.ipLimit, targets }
@@ -239,6 +283,7 @@ export async function createOrder(slug: string, input: CreateOrderInput): Promis
 			token: randomToken(16),
 			adminId: seller.id,
 			planId: plan.id,
+			customerId: account?.id ?? null,
 			renewClientId,
 			listPrice: plan.price,
 			discountCode: d.code,
@@ -255,17 +300,61 @@ export async function createOrder(slug: string, input: CreateOrderInput): Promis
 		},
 	})
 	if (d.id) await prisma.discount.update({ where: { id: d.id }, data: { uses: { increment: 1 } } }).catch(() => undefined)
-	await audit(seller.id, "order.create", order.id, { plan: plan.name, amount: amount.toString(), method: input.method, renew: !!renewClientId }, input.ip ?? null)
+	await audit(seller.id, "order.create", order.id, { plan: plan.name, amount: amount.toString(), method: input.method, renew: !!renewClientId, customerId: account?.id ?? null }, input.ip ?? null)
 	await emitEvent(seller.id, "order.created", { orderId: order.id, plan: plan.name, amount: amount.toString(), method: input.method })
 	if (amount <= 0n) {
 		const done = await fulfillOrder(order.id)
-		return { order: done, payment: null, next: { type: "done" }, token: order.token }
+		return { done: undefined, order: done, payment: null, next: { type: "done" }, token: order.token } as CreateOrderResult
+	}
+	if (payFromWallet && account) {
+		return payOrderWithWallet({ order, plan, amount, account, sellerId: seller.id, who: name || email || phone || telegramId })
 	}
 	const { payment, next } = await beginPayment(s, { kind: "ORDER", method: input.method, amount, adminId: seller.id, orderId: order.id, description: `${ctx.brand?.name || brandName()} — ${plan.name}`, mobile: phone, email })
 	await notify("order.new", `🛍 <b>سفارش جدید</b>\nپلن: ${plan.name}\nمبلغ: <b>${Number(amount).toLocaleString("en-US")}</b> تومان — روش: ${input.method}\nمشتری: ${name || telegramId || phone || "-"}`, { dedupeKey: `order:${order.id}:new`, targetId: order.id, recipients: { adminId: seller.id } })
 	// a deposit SMS may already have arrived before the buyer pressed "paid"
 	if (input.method === "CARD") await rematchDeposits(seller.id).catch(() => undefined)
 	return { order, payment, next, token: order.token }
+}
+
+/**
+ * Pays an order from the customer wallet: the balance is taken first, then the
+ * payment is confirmed (which marks the order PAID and provisions it). If the
+ * confirmation itself fails the money is returned, so a failed purchase never
+ * leaves the wallet short.
+ */
+async function payOrderWithWallet(p: { order: Order; plan: Plan; amount: bigint; account: Customer; sellerId: string; who: string | null }): Promise<CreateOrderResult> {
+	const { order, plan, amount, account, sellerId } = p
+	const payment = await prisma.payment.create({
+		data: { kind: "ORDER", method: "WALLET", amount, adminId: sellerId, orderId: order.id, customerId: account.id },
+	})
+	try {
+		await debitCustomerWallet({ customerId: account.id, amount, kind: "PURCHASE", refType: "order", refId: order.id, note: plan.name })
+	} catch (err) {
+		const msg = err instanceof Error ? err.message : "پرداخت از کیف پول ناموفق بود"
+		await prisma.payment.update({ where: { id: payment.id }, data: { status: "REJECTED", error: msg } })
+		await prisma.order.update({ where: { id: order.id }, data: { status: "CANCELED", error: msg } })
+		throw err
+	}
+	try {
+		const confirmed = await confirmPayment(payment.id, { auto: true, note: "پرداخت از کیف پول مشتری" })
+		const fresh = await prisma.order.findUnique({ where: { id: order.id } })
+		await notify("order.new", `🛍 <b>سفارش جدید (کیف پول)</b>\nپلن: ${plan.name}\nمبلغ: <b>${Number(amount).toLocaleString("en-US")}</b> تومان\nمشتری: ${p.who || "-"}`, { dedupeKey: `order:${order.id}:new`, targetId: order.id, recipients: { adminId: sellerId } })
+		return { order: fresh ?? order, payment: confirmed, next: { type: "done" }, token: order.token }
+	} catch (err) {
+		const msg = err instanceof Error ? err.message : "خطا در تکمیل سفارش"
+		const current = await prisma.payment.findUnique({ where: { id: payment.id } })
+		if (current && current.status !== "CONFIRMED") {
+			// the purchase never went through — give the balance back
+			await creditCustomerWallet({ customerId: account.id, amount, kind: "REFUND", refType: "order", refId: order.id, note: "برگشت وجه سفارش ناموفق" }).catch(() => undefined)
+			await prisma.payment.update({ where: { id: payment.id }, data: { status: "REJECTED", error: msg } })
+			await prisma.order.update({ where: { id: order.id }, data: { status: "CANCELED", error: msg } })
+			await audit(sellerId, "order.wallet_refund", order.id, { customerId: account.id, amount: amount.toString(), error: msg })
+			throw err
+		}
+		// paid but not provisioned: the order stays PAID and can be retried by the seller
+		const fresh = await prisma.order.findUnique({ where: { id: order.id } })
+		return { order: fresh ?? order, payment: current ?? payment, next: { type: "done" }, token: order.token }
+	}
 }
 
 export interface PublicOrder {
