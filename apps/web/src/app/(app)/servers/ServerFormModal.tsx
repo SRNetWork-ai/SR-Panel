@@ -26,6 +26,8 @@ export function ServerFormModal({
 	const [testing, setTesting] = useState(false)
 	const [result, setResult] = useState<TestResponse | null>(null)
 	const isNew = editing === "new"
+	/** the server being edited, or null while a new one is being added */
+	const current = editing && editing !== "new" ? editing : null
 
 	useEffect(() => {
 		setResult(null)
@@ -81,7 +83,7 @@ export function ServerFormModal({
 					totpSecret: p.totpSecret,
 					twoFactorCode: form.twoFactorCode.trim() || undefined,
 					insecureTls: p.insecureTls,
-					serverId: editing && editing !== "new" ? editing.id : undefined,
+					serverId: current?.id,
 				},
 			})
 			setResult(r)
@@ -100,8 +102,8 @@ export function ServerFormModal({
 			if (isNew) {
 				const s = await api<ServerDto>("/api/servers", { method: "POST", json: payload() })
 				onSaved(s, true)
-			} else if (editing) {
-				const s = await api<ServerDto>(`/api/servers/${editing.id}`, { method: "PATCH", json: payload() })
+			} else if (current) {
+				const s = await api<ServerDto>(`/api/servers/${current.id}`, { method: "PATCH", json: payload() })
 				onSaved(s, false)
 			}
 			toast.ok(t("set_saved"))
@@ -117,7 +119,7 @@ export function ServerFormModal({
 			open={editing !== null}
 			onClose={onClose}
 			title={isNew ? t("srv_add") : t("srv_edit")}
-			subtitle={!isNew && editing && editing !== "new" ? editing.baseUrl : L("اتصال پنل x-ui / 3x-ui", "Connect an x-ui / 3x-ui panel")}
+			subtitle={current ? current.baseUrl : L("اتصال پنل x-ui / 3x-ui", "Connect an x-ui / 3x-ui panel")}
 			size="lg"
 			footer={
 				<>
@@ -153,7 +155,7 @@ export function ServerFormModal({
 						</div>
 
 						{form.authMode === "token" ? (
-							<Field label={L("توکن API پنل", "Panel API token")} hint={!isNew && editing && editing !== "new" && editing.hasApiToken ? t("srv_pass_keep") : undefined}>
+							<Field label={L("توکن API پنل", "Panel API token")} hint={current?.hasApiToken ? t("srv_pass_keep") : undefined}>
 								<Input className="mono text-start" type="password" value={form.apiToken} onChange={(e) => set("apiToken", e.target.value)} required={isNew} autoComplete="new-password" placeholder="3xui_xxxxxxxxxxxxxxxx" />
 							</Field>
 						) : (
