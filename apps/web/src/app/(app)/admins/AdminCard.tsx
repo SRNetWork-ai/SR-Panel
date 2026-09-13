@@ -1,6 +1,7 @@
 "use client"
 
-import { KeyRound, Layers, Pencil, Power, Trash2 } from "lucide-react"
+import Link from "next/link"
+import { Eye, KeyRound, Layers, Pencil, Power, Trash2 } from "lucide-react"
 import { CopyBtn } from "@/components/bits"
 import { Badge, Button, Progress, cx } from "@/components/ui"
 import type { AdminDto } from "@/lib/dto"
@@ -13,6 +14,8 @@ export function AdminCard({
 	services,
 	servers,
 	selfId,
+	selected,
+	onSelect,
 	onEdit,
 	onToggle,
 	onDelete,
@@ -21,6 +24,9 @@ export function AdminCard({
 	services: ServiceLite[]
 	servers: ServerLite[]
 	selfId: string
+	selected?: boolean
+	/** when provided a selection checkbox is shown (bulk actions) */
+	onSelect?: () => void
 	onEdit: () => void
 	onToggle: () => void
 	onDelete: () => void
@@ -37,8 +43,9 @@ export function AdminCard({
 	const initials = (a.displayName || a.username).trim().slice(0, 2).toUpperCase()
 
 	return (
-		<div className={cx("glass glass-2 flex h-full flex-col gap-3 p-4", !a.isActive && "opacity-70")}>
+		<div className={cx("glass glass-2 flex h-full flex-col gap-3 p-4", !a.isActive && "opacity-70", selected && "ring-1 ring-violet-400/40")}>
 			<div className="flex items-start gap-3">
+				{onSelect && <input type="checkbox" checked={!!selected} onChange={onSelect} className="mt-1 h-4 w-4 shrink-0 accent-violet-500" aria-label={L("انتخاب", "Select")} />}
 				<div className={cx("grid h-11 w-11 shrink-0 place-items-center rounded-2xl text-sm font-semibold", owner ? "bg-violet-500/15 text-violet-300" : "bg-cyan-500/15 text-cyan-300")}>{initials}</div>
 				<div className="min-w-0 flex-1">
 					<div className="flex flex-wrap items-center gap-1.5">
@@ -112,6 +119,9 @@ export function AdminCard({
 			)}
 
 			<div className="mt-auto flex items-center justify-end gap-1 border-t border-white/5 pt-3">
+				<Link href={`/admins/${a.id}`} className="btn btn-icon btn-ghost" title={L("جزئیات و گزارش", "Details")}>
+					<Eye className="h-4 w-4" />
+				</Link>
 				{!owner && (
 					<Button size="icon" variant="ghost" type="button" title={a.isActive ? t("inactive") : t("active")} onClick={onToggle}>
 						<Power className={cx("h-4 w-4", a.isActive ? "text-success" : "text-muted")} />

@@ -1,13 +1,13 @@
 "use client"
 
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useEffect, useMemo, useState } from "react"
 import { Activity, AlertTriangle, CheckCircle2, Cpu, RefreshCw, Server as ServerIcon, Timer } from "lucide-react"
 import type { MonitoringOverview } from "@srpanel/core"
 import { api } from "@/lib/client"
 import { formatDate, relativeTime } from "@/lib/format"
 import { useLocale, useT } from "@/lib/i18n"
 import type { DictKey } from "@/lib/dict"
-import { Badge, Button, Card, Empty, PageHeader, Progress, Stat, StatusBadge, Switch, useConfirm, useToast } from "@/components/ui"
+import { Badge, Button, Card, Empty, PageHeader, Progress, Select, Stat, StatusBadge, Switch, useConfirm, useToast } from "@/components/ui"
 import { MiniBars } from "@/components/Charts"
 
 type Incident = MonitoringOverview["incidents"][number]
@@ -15,6 +15,7 @@ type Filter = "ALL" | "OPEN" | "RESOLVED"
 
 const KIND_KEY: Record<string, DictKey> = { OFFLINE: "inc_OFFLINE", AUTH_ERROR: "inc_AUTH_ERROR", XRAY_DOWN: "inc_XRAY_DOWN", HIGH_CPU: "inc_HIGH_CPU" }
 const KIND_TONE: Record<string, "danger" | "warning" | "violet" | "cyan"> = { OFFLINE: "danger", AUTH_ERROR: "warning", XRAY_DOWN: "violet", HIGH_CPU: "warning" }
+const KINDS = ["OFFLINE", "AUTH_ERROR", "XRAY_DOWN", "HIGH_CPU"]
 
 function uptimeTone(v: number | null): "success" | "warning" | "danger" | "muted" {
 	if (v === null) return "muted"
@@ -35,10 +36,13 @@ function duration(startIso: string, endIso: string | null, locale: "fa" | "en"):
 export function MonitoringClient({ initial }: { initial: MonitoringOverview }) {
 	const t = useT()
 	const locale = useLocale()
+	const L = (fa: string, en: string) => (locale === "fa" ? fa : en)
 	const toast = useToast()
 	const confirm = useConfirm()
 	const [data, setData] = useState<MonitoringOverview>(initial)
 	const [filter, setFilter] = useState<Filter>("ALL")
+	const [serverName, setServerName] = useState("ALL")
+	const [kind, setKind] = useState("ALL")
 	const [auto, setAuto] = useState(true)
 	const [loading, setLoading] = useState(false)
 
@@ -70,7 +74,38 @@ export function MonitoringClient({ initial }: { initial: MonitoringOverview }) {
 		}
 	}
 
-	const incidents = data.incidents.filter((i) => filter === "ALL" || i.status === filter)
+	/** Closes every open incident currently visible under the active filters. */
+	async function resolveVisible() {
+		const open = incidents.filter((i) => i.status === "OPEN")
+		if (!open.length) return
+		if (!confirm(t("mon_resolve_confirm"))) return
+		setLoading(true)
+		let done = 0
+		for (const inc of open) {
+			try {
+				await api(`/api/incidents/${inc.id}/resolve`, { method: "POST" })
+				done++
+			} catch {
+				/* keep going: one failure should not stop the batch */
+			}
+		}
+		setLoading(false)
+		if (done > 0) toast.ok(`${t("mon_resolved")} (${done})`)
+		else toast.err(t("error_generic"))
+		await refresh()
+	}
+
+	const serverNames = useMemo(() => {
+		const names = new Set<string>()
+		for (const s of data.servers) names.add(s.name)
+		for (const i of data.incidents) names.add(i.serverName)
+		return [...names].sort((a, b) => a.localeCompare(b))
+	}, [data])
+
+	const incidents = data.incidents.filter(
+		(i) => (filter === "ALL" || i.status === filter) && (serverName === "ALL" || i.serverName === serverName) && (kind === "ALL" || String(i.kind) === kind),
+	)
+	const openVisible = incidents.filter((i) => i.status === "OPEN").length
 	const { summary } = data
 
 	return (
@@ -163,12 +198,33 @@ export function MonitoringClient({ initial }: { initial: MonitoringOverview }) {
 				subtitle={t("mon_incidents_sub")}
 				bodyClassName="px-0 pb-0"
 				actions={
-					<div className="flex gap-1">
+					<div className="flex flex-wrap items-center justify-end gap-1">
 						{(["ALL", "OPEN", "RESOLVED"] as Filter[]).map((f) => (
 							<Button key={f} size="sm" variant={filter === f ? "primary" : "ghost"} onClick={() => setFilter(f)}>
 								{t(f === "ALL" ? "mon_filter_all" : f === "OPEN" ? "mon_filter_open" : "mon_filter_resolved")}
 							</Button>
 						))}
+						<Select value={serverName} onChange={(e) => setServerName(e.target.value)} className="w-auto">
+							<option value="ALL">{L("همهٔ سرورها", "All servers")}</option>
+							{serverNames.map((n) => (
+								<option key={n} value={n}>
+									{n}
+								</option>
+							))}
+						</Select>
+						<Select value={kind} onChange={(e) => setKind(e.target.value)} className="w-auto">
+							<option value="ALL">{L("همهٔ رویدادها", "All kinds")}</option>
+							{KINDS.map((k) => (
+								<option key={k} value={k}>
+									{t(KIND_KEY[k] ?? "inc_OFFLINE")}
+								</option>
+							))}
+						</Select>
+						{openVisible > 0 && (
+							<Button size="sm" variant="danger" loading={loading} onClick={resolveVisible}>
+								{L(`رفع همه (${openVisible})`, `Resolve all (${openVisible})`)}
+							</Button>
+						)}
 					</div>
 				}
 			>
