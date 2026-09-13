@@ -254,10 +254,10 @@ export function BackupsClient({ initial, settings: initialSettings, health: init
 			</div>
 
 			<div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-				<MiniStat icon={<ShieldCheck className="h-4 w-4" />} label={tr(locale, "آخرین بررسی سلامت", "Last integrity check")} value={health.lastCheck ? formatDate(health.lastCheck.at, locale, true) : "—"} tone={health.lastCheck ? (health.lastCheck.ok ? "success" : "danger") : "muted"} />
+				<MiniStat icon={<ShieldCheck className="h-4 w-4" />} label={tr(locale, "آخرین بررسی سلامت", "Last integrity check")} value={health.lastCheck ? formatDate(health.lastCheck.at, locale, true) : "—"} tone={health.lastCheck ? (health.lastCheck.ok ? "success" : "danger") : undefined} />
 				<MiniStat icon={<AlertTriangle className="h-4 w-4" />} label={tr(locale, "ناموفق ۷ روز", "Failed (7d)")} value={health.failed7d} tone={health.failed7d ? "danger" : "success"} />
-				<MiniStat icon={<HardDrive className="h-4 w-4" />} label={tr(locale, "فایل بدون رکورد", "Orphan files")} value={health.orphanFiles.length} tone={health.orphanFiles.length ? "warning" : "muted"} />
-				<MiniStat icon={<DatabaseBackup className="h-4 w-4" />} label={tr(locale, "رکورد بدون فایل", "Missing files")} value={health.missingFiles.length} tone={health.missingFiles.length ? "danger" : "muted"} />
+				<MiniStat icon={<HardDrive className="h-4 w-4" />} label={tr(locale, "فایل بدون رکورد", "Orphan files")} value={health.orphanFiles.length} tone={health.orphanFiles.length ? "warning" : undefined} />
+				<MiniStat icon={<DatabaseBackup className="h-4 w-4" />} label={tr(locale, "رکورد بدون فایل", "Missing files")} value={health.missingFiles.length} tone={health.missingFiles.length ? "danger" : undefined} />
 			</div>
 
 			<div className="grid gap-4 lg:grid-cols-3">
