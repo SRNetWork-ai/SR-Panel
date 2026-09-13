@@ -1,10 +1,10 @@
 "use client"
 
 import { useEffect, useMemo, useState, type FormEvent } from "react"
-import { BadgeCheck, BadgePercent, ChevronRight, Clock, Loader2, RefreshCw, ShieldCheck } from "lucide-react"
+import { BadgeCheck, BadgePercent, ChevronRight, Clock, Loader2, LogIn, RefreshCw, ShieldCheck, Wallet } from "lucide-react"
 import { api } from "@/lib/client"
 import { formatNumber } from "@/lib/format"
-import { FX_SOURCE_FA, METHOD_META, currencyLabel, type Method, type PublicPlan, type PublicStore } from "./types"
+import { FX_SOURCE_FA, METHOD_META, currencyLabel, type CustomerMe, type Method, type PublicPlan, type PublicStore } from "./types"
 
 /** Identity + discount + payment method + order submission. */
 
@@ -13,16 +13,26 @@ export function Checkout({
 	plan,
 	renewToken,
 	identity,
+	me,
+	onRequireLogin,
 	onChangePlan,
 }: {
 	store: PublicStore
 	plan: PublicPlan
 	renewToken?: string
 	identity: { telegramId: string; name: string; verified: boolean }
+	me: CustomerMe | null
+	onRequireLogin: () => void
 	onChangePlan: () => void
 }) {
 	const currency = currencyLabel(store.currency)
-	const [method, setMethod] = useState<Method>(store.methods[0] ?? "CARD")
+	const balance = me ? Number(me.customer.credit) : 0
+	// the wallet is only offered to a logged-in buyer of this store
+	const methods = useMemo<Method[]>(() => {
+		const base = store.methods.filter((m) => m !== "WALLET")
+		return me && store.accounts.walletEnabled ? ["WALLET", ...base] : base
+	}, [store.methods, store.accounts.walletEnabled, me])
+	const [method, setMethod] = useState<Method>(methods[0] ?? "CARD")
 	const [form, setForm] = useState({ name: identity.name, telegramId: identity.telegramId, phone: "", email: "" })
 	const [code, setCode] = useState("")
 	const [disc, setDisc] = useState<{ discount: number; code: string | null; error?: string | null } | null>(null)
@@ -37,6 +47,18 @@ export function Checkout({
 		setForm((f) => ({ ...f, telegramId: identity.telegramId || f.telegramId, name: f.name || identity.name }))
 	}, [identity.telegramId, identity.name])
 
+	// logging in mid-checkout prefills the contact fields from the account
+	useEffect(() => {
+		if (!me) return
+		const c = me.customer
+		setForm((f) => ({ name: f.name || c.name || "", telegramId: f.telegramId || c.telegramId || "", phone: f.phone || c.phone || "", email: f.email || c.email || "" }))
+	}, [me])
+
+	// keep the selected method valid when the list changes (login / logout)
+	useEffect(() => {
+		setMethod((m) => (methods.includes(m) ? m : (methods[0] ?? "CARD")))
+	}, [methods])
+
 	// a discount code is validated against one plan only
 	useEffect(() => {
 		setDisc(null)
@@ -47,6 +69,8 @@ export function Checkout({
 	const total = Math.max(0, price - discount)
 	const usdt = useMemo(() => (store.usdtRate > 0 ? (total / store.usdtRate).toFixed(2) : null), [total, store.usdtRate])
 	const rateSource = FX_SOURCE_FA[store.fx.source] ?? store.fx.source
+	const walletShort = method === "WALLET" && balance < total
+	const loginRequired = !me && !store.accounts.guestCheckout && store.accounts.enabled
 
 	async function checkCode() {
 		if (!code.trim()) return
@@ -63,6 +87,10 @@ export function Checkout({
 
 	async function submit(e: FormEvent) {
 		e.preventDefault()
+		if (loginRequired || (method === "WALLET" && !me)) {
+			onRequireLogin()
+			return
+		}
 		setError(null)
 		setBusy(true)
 		try {
@@ -108,6 +136,13 @@ export function Checkout({
 				</p>
 			) : null}
 
+			{loginRequired ? (
+				<div className="flex flex-wrap items-center justify-between gap-2 rounded-xl bg-violet/15 p-3 text-xs leading-5">
+					<span>خرید در این فروشگاه فقط با حساب کاربری انجام می‌شود.</span>
+					<button type="button" className="btn btn-sm" onClick={onRequireLogin}><LogIn className="h-4 w-4" /> ورود / ثبت‌نام</button>
+				</div>
+			) : null}
+
 			<div className="grid gap-3 sm:grid-cols-2">
 				<label className="label">نام (اختیاری)<input className="input mt-1" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="مطلاً علی" /></label>
 				<label className="label">شناسه عددی تلگرام {store.requireTelegram ? "*" : "(اختیاری)"}
@@ -126,18 +161,24 @@ export function Checkout({
 
 			<div className="space-y-2">
 				<div className="label">روش پرداخت</div>
-				{store.methods.length === 0 ? <p className="text-xs text-danger">هیچ روش پرداختی فعال نیست. با پشتیبانی تماس بگیرید.</p> : null}
+				{methods.length === 0 ? <p className="text-xs text-danger">هیچ روش پرداختی فعال نیست. با پشتیبانی تماس بگیرید.</p> : null}
 				<div className="grid gap-2 sm:grid-cols-3">
-					{store.methods.map((m) => {
+					{methods.map((m) => {
 						const meta = METHOD_META[m]
 						return (
 							<button type="button" key={m} onClick={() => setMethod(m)} className={"glass-2 flex items-center gap-3 rounded-xl p-3 text-start transition " + (method === m ? "neon-ring bg-violet/20" : "hover:bg-white/5")}>
 								<meta.icon className="h-5 w-5 shrink-0 text-cyan" />
-								<div><div className="text-sm font-medium">{meta.label}</div><div className="text-[11px] text-muted">{meta.hint}</div></div>
+								<div>
+									<div className="text-sm font-medium">{meta.label}</div>
+									<div className="text-[11px] text-muted">{m === "WALLET" ? "موجودی: " + formatNumber(balance, "fa") + " " + currency : meta.hint}</div>
+								</div>
 							</button>
 						)
 					})}
 				</div>
+				{!me && store.accounts.walletEnabled ? (
+					<button type="button" className="btn btn-ghost btn-sm" onClick={onRequireLogin}><Wallet className="h-4 w-4" /> پرداخت با کیف پول — وارد حساب شوید</button>
+				) : null}
 			</div>
 
 			<div className="glass-2 space-y-1 rounded-xl p-4 text-sm">
@@ -148,10 +189,17 @@ export function Checkout({
 					<span>مبلغ قابل پرداخت</span>
 					<span className="num neon-text">{formatNumber(total, "fa")} {currency}{method === "USDT" && usdt ? <span className="ms-2 text-xs font-normal text-muted">≈ {usdt} USDT</span> : null}</span>
 				</div>
+				{method === "WALLET" && me ? (
+					<div className="flex justify-between border-t border-white/10 pt-2 text-xs">
+						<span className="text-muted">موجودی پس از خرید</span>
+						<span className={"num " + (walletShort ? "text-danger" : "text-success")}>{formatNumber(Math.max(0, balance - total), "fa")} {currency}</span>
+					</div>
+				) : null}
 			</div>
 
 			<div className="space-y-1 text-[11px] leading-5 text-muted">
-				{store.paymentTtlMin > 0 && total > 0 ? <p className="flex items-center gap-1"><Clock className="h-3 w-3" /> مهلت پرداخت پس از ثبت سفارش: {formatNumber(store.paymentTtlMin, "fa")} دقیقه</p> : null}
+				{store.paymentTtlMin > 0 && total > 0 && method !== "WALLET" ? <p className="flex items-center gap-1"><Clock className="h-3 w-3" /> مهلت پرداخت پس از ثبت سفارش: {formatNumber(store.paymentTtlMin, "fa")} دقیقه</p> : null}
+				{method === "WALLET" ? <p className="flex items-start gap-1 text-success"><BadgeCheck className="mt-0.5 h-3 w-3 shrink-0" /> مبلغ از موجودی حساب شما کم می‌شود و اشتراک بلافاصله تحویل داده می‌شود.</p> : null}
 				{method === "USDT" ? <p>{store.fx.auto ? "نرخ تتر به صورت خودکار از " + rateSource + " دریافت می‌شود." : "نرخ تتر توسط فروشنده تعیین شده است."}{store.fx.stale ? " (ممکن است کمی قدیمی باشد)" : ""}</p> : null}
 				{method === "CARD" && store.cardAutoVerify ? (
 					<p className="flex items-start gap-1 text-success"><BadgeCheck className="mt-0.5 h-3 w-3 shrink-0" /> پرداخت کارت به کارت خودکار تأیید می‌شود؛ لطفاً دقیقاً همان مبلغی را که در صفحه پرداخت نمایش داده می‌شود واریز کنید.</p>
@@ -166,10 +214,11 @@ export function Checkout({
 				</label>
 			) : null}
 
+			{walletShort ? <p className="rounded-xl bg-danger/10 p-3 text-xs text-danger">موجودی کیف پول کافی نیست — از صفحه «حساب من» کیف پول را شارژ کنید یا روش دیگری انتخاب کنید.</p> : null}
 			{error ? <p className="rounded-xl bg-danger/10 p-3 text-sm text-danger">{error}</p> : null}
 
-			<button type="submit" className="btn btn-primary w-full py-3 text-base" disabled={busy || !accepted || (store.methods.length === 0 && total > 0)}>
-				{busy ? <Loader2 className="h-5 w-5 spin" /> : <ChevronRight className="h-5 w-5 rotate-180" />} {total === 0 ? "دریافت رایگان" : "ادامه و پرداخت"}
+			<button type="submit" className="btn btn-primary w-full py-3 text-base" disabled={busy || !accepted || walletShort || (methods.length === 0 && total > 0)}>
+				{busy ? <Loader2 className="h-5 w-5 spin" /> : <ChevronRight className="h-5 w-5 rotate-180" />} {total === 0 ? "دریافت رایگان" : method === "WALLET" ? "پرداخت از کیف پول" : "ادامه و پرداخت"}
 			</button>
 		</form>
 	)
