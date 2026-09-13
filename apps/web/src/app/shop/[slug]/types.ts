@@ -7,7 +7,7 @@ import { Clock, CreditCard, Globe, Headphones, Infinity as InfinityIcon, Landmar
  * client bundle never imports server-only code.
  */
 
-export type Method = "USDT" | "CARD" | "ZARINPAL"
+export type Method = "USDT" | "CARD" | "ZARINPAL" | "WALLET"
 
 export type PublicPlan = {
 	id: string
@@ -67,6 +67,16 @@ export type PublicBrand = {
 	supportUrl: string | null
 }
 
+/** Account & wallet capabilities of the storefront. */
+export type StoreAccounts = {
+	enabled: boolean
+	guestCheckout: boolean
+	walletEnabled: boolean
+	minTopup: string
+	topupBonusPct: number
+	requireEmail: boolean
+}
+
 export type PublicStore = {
 	slug: string
 	title: string
@@ -82,12 +92,80 @@ export type PublicStore = {
 	paymentTtlMin: number
 	fx: { auto: boolean; source: string; at: string | null; stale: boolean }
 	cardAutoVerify: boolean
+	accounts: StoreAccounts
+	announcement: string | null
+	termsUrl: string | null
 	page: StorePage
 	stats: { plans: number; locations: number; sold: number }
 	plans: PublicPlan[]
 }
 
+/* ---------- storefront account (session of the buyer) ---------- */
+
+export type CustomerProfile = {
+	id: string
+	name: string | null
+	email: string | null
+	phone: string | null
+	telegramId: string | null
+	credit: string
+	status: "ACTIVE" | "BLOCKED"
+	createdAt: string
+	lastLoginAt: string | null
+}
+
+export type WalletTxRow = {
+	id: string
+	kind: "TOPUP" | "PURCHASE" | "REFUND" | "ADJUST"
+	amount: string
+	balanceAfter: string
+	note: string | null
+	refType: string | null
+	refId: string | null
+	createdAt: string
+}
+
+export type CustomerOrderRow = {
+	token: string
+	status: string
+	amount: string
+	planName: string | null
+	createdAt: string
+}
+
+export type CustomerServiceRow = {
+	name: string
+	subToken: string
+	status: string
+	expiresAt: string | null
+	trafficLimit: string
+	used: string
+}
+
+export type CustomerMe = {
+	customer: CustomerProfile
+	orders: CustomerOrderRow[]
+	services: CustomerServiceRow[]
+	wallet: WalletTxRow[]
+}
+
+export const WALLET_KIND_FA: Record<WalletTxRow["kind"], string> = {
+	TOPUP: "شارژ کیف پول",
+	PURCHASE: "خرید",
+	REFUND: "برگشت وجه",
+	ADJUST: "اصلاح دستی",
+}
+
+export const ORDER_STATUS_FA: Record<string, string> = {
+	PENDING: "در انتظار پرداخت",
+	PAID: "پرداخت شده",
+	FULFILLED: "تحویل شده",
+	CANCELED: "لغو شده",
+	EXPIRED: "منقضی شده",
+}
+
 export const METHOD_META: Record<Method, { label: string; hint: string; icon: typeof CreditCard }> = {
+	WALLET: { label: "کیف پول من", hint: "پرداخت از موجودی حساب — تحویل فوری", icon: Wallet },
 	USDT: { label: "تتر (USDT · TRC20)", hint: "پرداخت ارز دیجیتال با تأیید خودکار تراکنش", icon: Zap },
 	CARD: { label: "کارت به کارت", hint: "انتقال بانکی و ثبت رسید — تأیید سریع", icon: Landmark },
 	ZARINPAL: { label: "درگاه بانکی (زرین‌پال)", hint: "پرداخت آنلاین با کارت بانکی — تحویل فوری", icon: CreditCard },

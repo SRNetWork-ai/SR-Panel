@@ -304,7 +304,7 @@ export async function createOrder(slug: string, input: CreateOrderInput): Promis
 	await emitEvent(seller.id, "order.created", { orderId: order.id, plan: plan.name, amount: amount.toString(), method: input.method })
 	if (amount <= 0n) {
 		const done = await fulfillOrder(order.id)
-		return { done: undefined, order: done, payment: null, next: { type: "done" }, token: order.token } as CreateOrderResult
+		return { order: done, payment: null, next: { type: "done" }, token: order.token }
 	}
 	if (payFromWallet && account) {
 		return payOrderWithWallet({ order, plan, amount, account, sellerId: seller.id, who: name || email || phone || telegramId })
