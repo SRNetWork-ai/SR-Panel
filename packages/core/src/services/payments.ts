@@ -2,6 +2,7 @@ import { prisma, type Admin, type Payment, type PaymentKind, type PaymentMethod,
 import { AppError, ForbiddenError, NotFoundError } from "../util/errors"
 import { audit } from "./audit"
 import { cryptoMetaOf, isTrc20Usdt, quoteCrypto } from "./cryptoAssets"
+import { settleCustomerTopup } from "./customers"
 import { fulfillOrder } from "./fulfillment"
 import { notify } from "./notifications"
 import { brandName, getTelegramSettings, panelUrl } from "./settings"
@@ -133,15 +134,18 @@ export async function ownerAdmin(): Promise<Admin> {
 	return o
 }
 
-/** Settings that govern a payment: seller's for ORDER, owner's for TOPUP */
-export async function settingsForPayment(p: Pick<Payment, "kind" | "adminId">): Promise<StoreSettings | null> {
-	if (p.kind === "ORDER") return storeSettingsByAdminId(p.adminId)
+/**
+ * Settings that govern a payment: the seller's for ORDER and for storefront
+ * customer top-ups, the owner's for reseller (admin) top-ups.
+ */
+export async function settingsForPayment(p: Pick<Payment, "kind" | "adminId"> & { customerId?: string | null }): Promise<StoreSettings | null> {
+	if (p.kind === "ORDER" || p.customerId) return storeSettingsByAdminId(p.adminId)
 	const owner = await ownerAdmin()
 	return storeSettingsByAdminId(owner.id)
 }
 
-async function reviewerId(p: Pick<Payment, "kind" | "adminId">): Promise<{ adminId: string | null; ownerOnly: boolean }> {
-	return p.kind === "ORDER" ? { adminId: p.adminId, ownerOnly: false } : { adminId: null, ownerOnly: true }
+async function reviewerId(p: Pick<Payment, "kind" | "adminId"> & { customerId?: string | null }): Promise<{ adminId: string | null; ownerOnly: boolean }> {
+	return p.kind === "ORDER" || p.customerId ? { adminId: p.adminId, ownerOnly: false } : { adminId: null, ownerOnly: true }
 }
 
 export interface PaymentProof {
@@ -189,7 +193,7 @@ export async function submitProof(paymentId: string, proof: PaymentProof): Promi
 
 async function announceReview(p: Payment): Promise<void> {
 	const r = await reviewerId(p)
-	const kindFa = p.kind === "ORDER" ? "سفارش" : "شارژ کیف پول"
+	const kindFa = p.kind === "ORDER" ? "سفارش" : p.customerId ? "شارژ کیف پول مشتری" : "شارژ کیف پول"
 	const coin = cryptoMetaOf(p)
 	const coinLine = coin ? `\nارز: <b>${tgEscape(coin.amount)} ${tgEscape(coin.symbol)}</b> — ${tgEscape(coin.networkLabel)}` : ""
 	const text = `🧾 <b>پرداخت در انتظار بررسی</b> (${kindFa})\nمبلغ: <b>${fmtIrt(p.amount)}</b> تومان — روش: ${p.method}${coinLine}${p.txid ? `\nTXID: <code>${tgEscape(p.txid)}</code>` : ""}${p.receiptRef ? `\nپیگیری: <code>${tgEscape(p.receiptRef)}</code>` : ""}${p.error ? `\n⚠️ ${tgEscape(p.error)}` : ""}\n\nبررسی: ${panelUrl()}/orders?tab=payments`
@@ -205,9 +209,11 @@ export interface ConfirmOpts {
 	cardPan?: string | null
 }
 
-export function canReview(actor: Pick<Admin, "id" | "role">, p: Pick<Payment, "kind" | "adminId">): boolean {
+export function canReview(actor: Pick<Admin, "id" | "role">, p: Pick<Payment, "kind" | "adminId"> & { customerId?: string | null }): boolean {
 	if (actor.role === "OWNER") return true
-	return p.kind === "ORDER" && p.adminId === actor.id
+	if (p.kind === "ORDER") return p.adminId === actor.id
+	// customer wallet top-ups are reviewed by the seller, reseller top-ups by the owner
+	return !!p.customerId && p.adminId === actor.id
 }
 
 export async function confirmPayment(paymentId: string, opts: ConfirmOpts = {}): Promise<Payment> {
@@ -221,7 +227,12 @@ export async function confirmPayment(paymentId: string, opts: ConfirmOpts = {}):
 		data: { status: "CONFIRMED", reviewedById: opts.by?.id ?? null, reviewedAt: new Date(), reviewNote: opts.note ?? (opts.auto ? "تأیید خودکار" : null), refId: opts.refId ?? p.refId, cardPan: opts.cardPan ?? p.cardPan, error: null },
 	})
 	await audit(opts.by?.id ?? null, "payment.confirm", p.id, { kind: p.kind, method: p.method, amount: p.amount.toString(), auto: !!opts.auto })
-	if (p.kind === "TOPUP") {
+	if (p.kind === "TOPUP" && p.customerId) {
+		// storefront wallet: the credit belongs to the buyer, not to the seller
+		await settleCustomerTopup(p.id)
+		await notify("wallet.topup", `💳 <b>شارژ کیف پول مشتری</b>\nمبلغ: <b>${fmtIrt(p.amount)}</b> تومان — روش: ${p.method}`, { dedupeKey: `topup:${p.id}`, targetId: p.id, recipients: { adminId: p.adminId } })
+		await emitEvent(p.adminId, "customer.topup", { paymentId: p.id, customerId: p.customerId, amount: p.amount.toString(), method: p.method })
+	} else if (p.kind === "TOPUP") {
 		await chargeWallet({ id: p.adminId, role: "ADMIN" }, p.amount, "TOPUP", { refType: "payment", refId: p.id, byAdminId: opts.by?.id ?? null, note: `شارژ کیف پول (${p.method})` })
 		await notify("wallet.topup", `💳 <b>کیف پول شارژ شد</b>\nمبلغ: <b>${fmtIrt(p.amount)}</b> تومان — روش: ${p.method}`, { dedupeKey: `topup:${p.id}`, targetId: p.id, recipients: { adminId: p.adminId } })
 		await emitEvent(p.adminId, "wallet.topup", { paymentId: p.id, adminId: p.adminId, amount: p.amount.toString(), method: p.method })
@@ -295,7 +306,12 @@ export async function listPayments(actor: Pick<Admin, "id" | "role">, opts: { st
 export async function handleZarinpalCallback(paymentId: string, authority: string, status: string): Promise<{ ok: boolean; redirect: string; error?: string }> {
 	const p = await prisma.payment.findUnique({ where: { id: paymentId }, include: { order: true } })
 	if (!p) return { ok: false, redirect: `${panelUrl()}/`, error: "payment not found" }
-	const target = p.order ? `${panelUrl()}/shop/o/${p.order.token}` : `${panelUrl()}/wallet`
+	let target = p.order ? `${panelUrl()}/shop/o/${p.order.token}` : `${panelUrl()}/wallet`
+	if (!p.order && p.customerId) {
+		// a storefront customer top-up goes back to the shop account page
+		const shop = await storeSettingsByAdminId(p.adminId)
+		if (shop) target = `${panelUrl()}/shop/${shop.slug}/account`
+	}
 	if (p.status === "CONFIRMED") return { ok: true, redirect: `${target}?pay=ok` }
 	if (status !== "OK") {
 		await prisma.payment.update({ where: { id: p.id }, data: { status: "REJECTED", error: "پرداخت توسط کاربر لغو شد" } })
