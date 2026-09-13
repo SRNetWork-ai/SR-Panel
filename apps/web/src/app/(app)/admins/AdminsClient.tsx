@@ -2,7 +2,7 @@
 
 import { useRouter } from "next/navigation"
 import { useMemo, useState } from "react"
-import { HardDrive, Layers, ShieldCheck, ShieldPlus, Users } from "lucide-react"
+import { HardDrive, Layers, Power, ShieldCheck, ShieldPlus, Timer, Users } from "lucide-react"
 import { MiniStat } from "@/components/bits"
 import { Button, Card, Empty, Input, PageHeader, Select, cx, useConfirm, useToast } from "@/components/ui"
 import { ApiError, api } from "@/lib/client"
@@ -12,6 +12,8 @@ import { useLocale, useT } from "@/lib/i18n"
 import { AdminCard } from "./AdminCard"
 import { AdminFormModal } from "./AdminFormModal"
 import { daysLeft, isPublic, quotaPct, servicesOf, tr, type AdminFilter, type AdminSort, type ServerLite, type ServiceLite } from "./types"
+
+type BulkAction = "activate" | "deactivate" | "extend" | "quota"
 
 export function AdminsClient({ initial, servers, services: initialServices, selfId }: { initial: AdminDto[]; servers: ServerLite[]; services: ServiceLite[]; selfId: string }) {
 	const t = useT()
@@ -26,6 +28,10 @@ export function AdminsClient({ initial, servers, services: initialServices, self
 	const [q, setQ] = useState("")
 	const [filter, setFilter] = useState<AdminFilter>("all")
 	const [sort, setSort] = useState<AdminSort>("name")
+	const [sel, setSel] = useState<string[]>([])
+	const [bulkBusy, setBulkBusy] = useState(false)
+	const [days, setDays] = useState("30")
+	const [quota, setQuota] = useState("")
 
 	const sharedCount = services.filter(isPublic).length
 
@@ -82,6 +88,11 @@ export function AdminsClient({ initial, servers, services: initialServices, self
 		{ id: "noservice", label: L("بی‌سرویس", "No service"), count: counts.noservice },
 	]
 
+	const selectable = rows.filter((a) => a.role !== "OWNER")
+	const allSelected = selectable.length > 0 && selectable.every((a) => sel.includes(a.id))
+	const toggleSel = (id: string) => setSel((l) => (l.includes(id) ? l.filter((x) => x !== id) : [...l, id]))
+	const toggleSelectAll = () => setSel(allSelected ? [] : selectable.map((a) => a.id))
+
 	const onSaved = (a: AdminDto, isNew: boolean, changed: ServiceLite[]) => {
 		setAdmins((l) => (isNew ? [...l, a] : l.map((x) => (x.id === a.id ? { ...x, ...a } : x))))
 		if (changed.length) setServices((l) => l.map((s) => changed.find((c) => c.id === s.id) ?? s))
@@ -107,6 +118,27 @@ export function AdminsClient({ initial, servers, services: initialServices, self
 			toast.ok(t("set_saved"))
 		} catch (err) {
 			toast.err(err instanceof ApiError ? err.message : t("error_generic"))
+		}
+	}
+
+	/** One action on every selected reseller (the owner row can never be selected). */
+	const bulk = async (action: BulkAction, extra?: Record<string, unknown>) => {
+		if (!sel.length) return
+		if (action === "deactivate" && !confirm(L("ادمین‌های انتخاب‌شده غیرفعال شوند؟ نشست‌های فعالشان قطع می‌شود.", "Deactivate the selected admins? Their sessions are revoked."))) return
+		setBulkBusy(true)
+		try {
+			const r = await api<{ updated: number; skipped: Array<{ id: string; reason: string }>; admins: AdminDto[] }>("/api/admins/bulk", {
+				method: "POST",
+				json: { ids: sel, action, ...extra },
+			})
+			setAdmins((l) => l.map((x) => r.admins.find((n) => n.id === x.id) ?? x))
+			toast.ok(`${t("set_saved")} (${formatNumber(r.updated, locale)})`)
+			setSel([])
+			router.refresh()
+		} catch (err) {
+			toast.err(err instanceof ApiError ? err.message : t("error_generic"))
+		} finally {
+			setBulkBusy(false)
 		}
 	}
 
@@ -142,6 +174,11 @@ export function AdminsClient({ initial, servers, services: initialServices, self
 						<option value="expires">{L("مرتب‌سازی: تاریخ انقضا", "Sort: expiry")}</option>
 						<option value="login">{L("مرتب‌سازی: آخرین ورود", "Sort: last login")}</option>
 					</Select>
+					{selectable.length > 0 && (
+						<Button size="sm" variant="ghost" type="button" onClick={toggleSelectAll}>
+							{allSelected ? L("لغو انتخاب همه", "Clear selection") : L("انتخاب همه", "Select all")}
+						</Button>
+					)}
 				</div>
 				<div className="flex flex-wrap gap-1.5">
 					{chips.map((c) => (
@@ -159,6 +196,42 @@ export function AdminsClient({ initial, servers, services: initialServices, self
 				</div>
 			</Card>
 
+			{sel.length > 0 && (
+				<Card bodyClassName="flex flex-wrap items-center gap-2">
+					<span className="text-sm font-medium">{L(`${formatNumber(sel.length, locale)} ادمین انتخاب شده`, `${sel.length} selected`)}</span>
+					<Button size="sm" variant="ghost" type="button" onClick={() => setSel([])}>
+						{L("لغو انتخاب", "Clear")}
+					</Button>
+					<Button size="sm" type="button" loading={bulkBusy} onClick={() => bulk("activate")}>
+						<Power className="h-4 w-4 text-success" />
+						{t("active")}
+					</Button>
+					<Button size="sm" variant="danger" type="button" loading={bulkBusy} onClick={() => bulk("deactivate")}>
+						<Power className="h-4 w-4" />
+						{t("inactive")}
+					</Button>
+					<div className="flex items-center gap-1">
+						<div className="w-20">
+							<Input type="number" value={days} onChange={(e) => setDays(e.target.value)} />
+						</div>
+						<Button size="sm" type="button" loading={bulkBusy} disabled={!Number(days)} onClick={() => bulk("extend", { days: Number(days) })}>
+							<Timer className="h-4 w-4" />
+							{L("افزودن روز", "Add days")}
+						</Button>
+					</div>
+					<div className="flex items-center gap-1">
+						<div className="w-24">
+							<Input type="number" value={quota} onChange={(e) => setQuota(e.target.value)} placeholder="GB" />
+						</div>
+						<Button size="sm" type="button" loading={bulkBusy} onClick={() => bulk("quota", { quotaGB: quota.trim() === "" ? null : Number(quota) })}>
+							<HardDrive className="h-4 w-4" />
+							{L("تنظیم سهمیه", "Set quota")}
+						</Button>
+					</div>
+					<span className="text-[11px] text-muted">{L("سهمیهٔ خالی = نامحدود", "Empty quota = unlimited")}</span>
+				</Card>
+			)}
+
 			{rows.length === 0 ? (
 				<Card>
 					<Empty text={L("ادمینی با این فیلتر پیدا نشد", "No admin matches this filter")} action={<Button type="button" variant="primary" onClick={() => setModal("new")}>{t("ad_add")}</Button>} />
@@ -166,7 +239,18 @@ export function AdminsClient({ initial, servers, services: initialServices, self
 			) : (
 				<div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
 					{rows.map((a) => (
-						<AdminCard key={a.id} admin={a} services={services} servers={servers} selfId={selfId} onEdit={() => setModal(a)} onToggle={() => toggleActive(a)} onDelete={() => remove(a)} />
+						<AdminCard
+							key={a.id}
+							admin={a}
+							services={services}
+							servers={servers}
+							selfId={selfId}
+							selected={sel.includes(a.id)}
+							onSelect={a.role === "OWNER" ? undefined : () => toggleSel(a.id)}
+							onEdit={() => setModal(a)}
+							onToggle={() => toggleActive(a)}
+							onDelete={() => remove(a)}
+						/>
 					))}
 				</div>
 			)}
