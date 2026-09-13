@@ -23,7 +23,17 @@ export const backupSettingsSchema = z.object({
 	enabled: z.boolean().default(true),
 	/** local hour (SRP_TZ) of the daily backup */
 	hour: z.number().int().min(0).max(23).default(4),
+	/** additional daily hours besides `hour` (max 11 -> up to 12 runs/day) */
+	extraHours: z.array(z.number().int().min(0).max(23)).max(11).default([]),
 	keepLast: z.number().int().min(1).max(90).default(7),
+	/** also drop OK backups older than N days (0 = disabled; newest is always kept) */
+	keepDays: z.number().int().min(0).max(365).default(0),
+	/** verify the gzip dump right after it is written */
+	verify: z.boolean().default(true),
+	/** housekeeping (orphan sidecars / dead rows) after every run */
+	autoCleanup: z.boolean().default(true),
+	/** warn when the newest OK backup is older than N hours (0 = disabled) */
+	staleAfterHours: z.number().int().min(0).max(720).default(48),
 	sendToTelegram: z.boolean().default(true),
 })
 export type BackupSettings = z.infer<typeof backupSettingsSchema>
