@@ -87,6 +87,8 @@ model Admin {
   reviewedPayments Payment[] @relation("PaymentReviewer")
   walletTxs     WalletTx[]
   services      Service[]  @relation("ServiceOwner")
+  /// Storefront customer accounts that belong to this seller
+  customers     Customer[]
 
   @@index([role])
 }
@@ -215,12 +217,16 @@ model Client {
   createdAt     DateTime      @default(now())
   updatedAt     DateTime      @updatedAt
   orders        Order[]
+  /// Storefront account this subscription belongs to (null = created by an admin)
+  customerId    String?
+  customer      Customer?     @relation(fields: [customerId], references: [id], onDelete: SetNull)
 
   servers       ClientServer[]
   usageSamples  ClientUsage[]
 
   @@index([adminId, status])
   @@index([expiresAt])
+  @@index([customerId])
 }
 
 /// Provisioning of a client on a specific server/inbound
@@ -511,6 +517,25 @@ model StoreSettings {
   requirePhone     Boolean  @default(false)
   /// Minutes a pending payment stays open
   paymentTtlMin    Int      @default(60)
+  /// --- storefront accounts & wallet (stage 2C) ---
+  /// Customers may sign up / log in on the storefront
+  accountsEnabled  Boolean  @default(false)
+  /// Ordering without an account stays possible
+  guestCheckout    Boolean  @default(true)
+  /// Customers may top up a wallet and pay from the balance
+  walletEnabled    Boolean  @default(true)
+  /// Minimum wallet top-up (IRT, 0 = no minimum)
+  minTopup         BigInt   @default(0)
+  /// Bonus percentage credited on every confirmed top-up
+  topupBonusPct    Int      @default(0)
+  /// Signup requires an email address
+  requireEmail     Boolean  @default(false)
+  /// Short banner shown on top of the storefront
+  announcement     String?
+  /// Terms & conditions link shown at signup/checkout
+  termsUrl         String?
+  /// Public Telegram channel of the store
+  telegramChannel  String?
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 }
@@ -568,6 +593,9 @@ model Order {
   plan               Plan?       @relation(fields: [planId], references: [id], onDelete: SetNull)
   clientId           String?
   client             Client?     @relation(fields: [clientId], references: [id], onDelete: SetNull)
+  /// Storefront account that placed the order (null = guest checkout)
+  customerId         String?
+  customer           Customer?   @relation(fields: [customerId], references: [id], onDelete: SetNull)
   /// When set, the order renews this client instead of creating a new one
   renewClientId      String?
   status             OrderStatus @default(PENDING)
@@ -591,6 +619,7 @@ model Order {
   payments           Payment[]
 
   @@index([adminId, status, createdAt])
+  @@index([customerId, createdAt])
 }
 
 model Payment {
@@ -603,6 +632,9 @@ model Payment {
   /// ORDER: the seller admin. TOPUP: the admin whose wallet is credited.
   adminId      String
   admin        Admin         @relation("PaymentAdmin", fields: [adminId], references: [id], onDelete: Cascade)
+  /// Set when the payer is a storefront customer (wallet top-up or wallet payment)
+  customerId   String?
+  customer     Customer?     @relation(fields: [customerId], references: [id], onDelete: SetNull)
   /// IRT
   amount       BigInt
   /// USDT amount as decimal string
@@ -625,6 +657,7 @@ model Payment {
 
   @@index([adminId, status, createdAt])
   @@index([status, expiresAt])
+  @@index([customerId, createdAt])
 }
 
 model WalletTx {
@@ -642,4 +675,78 @@ model WalletTx {
   createdAt    DateTime     @default(now())
 
   @@index([adminId, createdAt])
+}
+
+// ---------------------------------------------------------------------------
+// Stage 2C — storefront customer accounts & customer wallet
+// ---------------------------------------------------------------------------
+
+enum CustomerStatus {
+  ACTIVE
+  BLOCKED
+}
+
+/// A storefront account (end buyer). Scoped to one seller admin — completely
+/// separate from panel Admins, with its own sessions and wallet ledger.
+model Customer {
+  id           String         @id @default(cuid())
+  adminId      String
+  admin        Admin          @relation(fields: [adminId], references: [id], onDelete: Cascade)
+  name         String?
+  email        String?
+  phone        String?
+  telegramId   String?
+  passwordHash String
+  /// Wallet balance in the store currency (IRT)
+  credit       BigInt         @default(0)
+  status       CustomerStatus @default(ACTIVE)
+  note         String?
+  lastLoginAt  DateTime?
+  lastLoginIp  String?
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+
+  sessions     CustomerSession[]
+  walletTxs    CustomerWalletTx[]
+  orders       Order[]
+  payments     Payment[]
+  clients      Client[]
+
+  @@unique([adminId, email])
+  @@unique([adminId, phone])
+  @@index([adminId, status])
+}
+
+/// Storefront login sessions (httpOnly cookie holds the token, DB keeps its hash)
+model CustomerSession {
+  id         String   @id @default(cuid())
+  customerId String
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  tokenHash  String   @unique
+  userAgent  String?
+  ip         String?
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+
+  @@index([customerId])
+}
+
+/// Customer wallet ledger — every credit/debit with the resulting balance
+model CustomerWalletTx {
+  id           String       @id @default(cuid())
+  customerId   String
+  customer     Customer     @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  kind         WalletTxKind
+  /// Signed amount (IRT): positive = credit, negative = debit
+  amount       BigInt
+  balanceAfter BigInt
+  refType      String?
+  refId        String?
+  note         String?
+  /// Admin who performed a manual adjustment
+  byAdminId    String?
+  createdAt    DateTime     @default(now())
+
+  @@index([customerId, createdAt])
+  @@index([refType, refId])
 }
