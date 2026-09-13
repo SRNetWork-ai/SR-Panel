@@ -1,6 +1,7 @@
 "use client"
 
-import { ArrowDown, ArrowUp, Cpu, HardDrive, Pencil, RefreshCw, Trash2 } from "lucide-react"
+import Link from "next/link"
+import { ArrowDown, ArrowUp, Cpu, Eye, HardDrive, Pencil, RefreshCw, Trash2 } from "lucide-react"
 import type { ServerDto } from "@/lib/dto"
 import { formatBytes, relativeTime } from "@/lib/format"
 import { useLocale, useT } from "@/lib/i18n"
@@ -31,7 +32,7 @@ export function ServerCard({
 			<div className="mb-3 flex items-start justify-between gap-2">
 				<div className="min-w-0">
 					<div className="flex flex-wrap items-center gap-1.5">
-						<h3 className="truncate font-semibold">{s.name}</h3>
+						<Link href={`/servers/${s.id}`} className="truncate font-semibold hover:underline" title={L("مشاهده جزئیات سرور", "View server details")}>{s.name}</Link>
 						{s.authMode === "token" && <Badge tone="cyan">API</Badge>}
 						{s.panelVersion && <Badge tone="violet">v{s.panelVersion}</Badge>}
 						{!s.isActive && <Badge>{t("inactive")}</Badge>}
@@ -106,6 +107,7 @@ export function ServerCard({
 			<div className="flex items-center justify-between gap-2">
 				<span className="text-[11px] text-muted">{t("last_seen")}: {relativeTime(s.lastSeenAt, locale)}</span>
 				<div className="flex gap-1">
+					<Link href={`/servers/${s.id}`} className="btn btn-icon btn-ghost" title={L("جزئیات سرور", "Server details")}><Eye className="h-4 w-4" /></Link>
 					<Button type="button" size="icon" title={t("srv_sync")} onClick={onSync} loading={syncing}>{!syncing && <RefreshCw className="h-4 w-4" />}</Button>
 					<Button type="button" size="icon" title={t("edit")} onClick={onEdit}><Pencil className="h-4 w-4" /></Button>
 					<Button type="button" size="icon" variant="danger" title={L("حذف سرور", "Delete server")} onClick={onRemove}><Trash2 className="h-4 w-4" /></Button>
