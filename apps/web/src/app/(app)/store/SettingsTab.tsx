@@ -1,7 +1,7 @@
 "use client"
 
 import { useEffect, useState, type FormEvent } from "react"
-import { ExternalLink, Plus, ShieldCheck, X } from "lucide-react"
+import { ExternalLink, Plus, ShieldCheck, UserRound, X } from "lucide-react"
 import { api } from "@/lib/client"
 import { useLocale, useT } from "@/lib/i18n"
 import { Badge, Button, Card, Field, Input, Select, Spinner, SubHead, Switch, Textarea, cx, useToast } from "@/components/ui"
@@ -71,6 +71,15 @@ export function SettingsTab({ initial }: { initial: StoreSettings }) {
 					requireTelegram: s.requireTelegram,
 					requirePhone: s.requirePhone,
 					paymentTtlMin: Number(s.paymentTtlMin) || 60,
+					accountsEnabled: s.accountsEnabled,
+					guestCheckout: s.guestCheckout,
+					walletEnabled: s.walletEnabled,
+					requireEmail: s.requireEmail,
+					minTopup: Number(s.minTopup) || 0,
+					topupBonusPct: Number(s.topupBonusPct) || 0,
+					announcement: s.announcement,
+					termsUrl: s.termsUrl,
+					telegramChannel: s.telegramChannel,
 				},
 			})
 			setS(saved)
@@ -132,6 +141,44 @@ export function SettingsTab({ initial }: { initial: StoreSettings }) {
 						</div>
 						<div className="pt-2 text-[11px] text-muted">{L("تنظیمات روش‌های پرداخت به تب «پرداخت‌ها» منتقل شده است.", "Payment configuration now lives in the Payments tab.")}</div>
 					</div>
+				</div>
+			</Card>
+
+			<Card
+				title={
+					<span className="inline-flex items-center gap-2">
+						<UserRound className="h-4 w-4" /> {L("حساب مشتری و کیف پول", "Customer accounts & wallet")}
+					</span>
+				}
+				subtitle={L("مشتری حساب می‌سازد، کیف پول شارژ می‌کند و سفارش‌هایش را دنبال می‌کند", "Buyers can register, top up a wallet and track their own orders")}
+			>
+				<div className="grid gap-4 md:grid-cols-2">
+					<div className="tile flex flex-wrap gap-x-6 gap-y-3 md:col-span-2">
+						<Switch checked={s.accountsEnabled} onChange={(v) => set("accountsEnabled", v)} label={L("ثبت‌نام و ورود مشتری", "Customer accounts")} />
+						<Switch checked={s.guestCheckout} onChange={(v) => set("guestCheckout", v)} label={L("خرید بدون حساب (مهمان)", "Guest checkout")} />
+						<Switch checked={s.walletEnabled} onChange={(v) => set("walletEnabled", v)} label={L("کیف پول مشتری", "Customer wallet")} />
+						<Switch checked={s.requireEmail} onChange={(v) => set("requireEmail", v)} label={L("ایمیل اجباری", "Require email")} />
+					</div>
+					<Field label={L("حداقل مبلغ شارژ (تومان)", "Minimum top-up (IRT)")} hint={L("۰ = بدون محدودیت", "0 = no minimum")}>
+						<Input type="number" min={0} value={s.minTopup} onChange={(e) => set("minTopup", e.target.value)} />
+					</Field>
+					<Field label={L("هدیهٔ شارژ (درصد)", "Top-up bonus (%)")} hint={L("به هر شارژ تأییدشده اضافه می‌شود", "Added to every confirmed top-up")}>
+						<Input type="number" min={0} max={50} value={s.topupBonusPct} onChange={(e) => set("topupBonusPct", Number(e.target.value))} />
+					</Field>
+					<Field label={L("کانال تلگرام مشتریان", "Customer Telegram channel")}>
+						<Input dir="ltr" value={s.telegramChannel ?? ""} onChange={(e) => set("telegramChannel", e.target.value.trim())} placeholder="https://t.me/…" />
+					</Field>
+					<Field label={L("لینک قوانین", "Terms URL")}>
+						<Input dir="ltr" value={s.termsUrl ?? ""} onChange={(e) => set("termsUrl", e.target.value.trim())} placeholder="https://…" />
+					</Field>
+					<div className="md:col-span-2">
+						<Field label={L("اطلاعیهٔ پنل مشتری", "Customer announcement")} hint={L("خالی = نمایش داده نمی‌شود", "Empty = hidden")}>
+							<Textarea rows={2} value={s.announcement ?? ""} onChange={(e) => set("announcement", e.target.value)} />
+						</Field>
+					</div>
+					{!s.accountsEnabled && !s.guestCheckout && <div className="text-[11px] text-danger md:col-span-2">{L("حداقل یکی از «حساب مشتری» یا «خرید مهمان» باید فعال باشد.", "At least one of customer accounts or guest checkout must stay on.")}</div>}
+					{s.walletEnabled && !s.accountsEnabled && <div className="text-[11px] text-warning md:col-span-2">{L("کیف پول بدون فعال بودن حساب مشتری کار نمی‌کند.", "The wallet needs customer accounts enabled.")}</div>}
+					<div className="text-[11px] text-muted md:col-span-2">{L("فهرست مشتریان و شارژ دستی کیف پول در تب «مشتریان» است.", "Customer list and manual wallet credit live in the Customers tab.")}</div>
 				</div>
 			</Card>
 
