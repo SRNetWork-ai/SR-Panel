@@ -28,6 +28,16 @@ export const storeSettingsInput = z.object({
 	requireTelegram: z.boolean().optional(),
 	requirePhone: z.boolean().optional(),
 	paymentTtlMin: z.number().int().min(5).max(1440).optional(),
+	// storefront accounts & wallet
+	accountsEnabled: z.boolean().optional(),
+	guestCheckout: z.boolean().optional(),
+	walletEnabled: z.boolean().optional(),
+	minTopup: z.number().int().min(0).max(2_000_000_000).optional(),
+	topupBonusPct: z.number().int().min(0).max(50).optional(),
+	requireEmail: z.boolean().optional(),
+	announcement: z.string().max(300).nullable().optional(),
+	termsUrl: z.string().max(300).nullable().optional(),
+	telegramChannel: z.string().max(120).nullable().optional(),
 })
 export type StoreSettingsInput = z.infer<typeof storeSettingsInput>
 
@@ -67,11 +77,23 @@ export function enabledMethods(s: StoreSettings): PaymentMethod[] {
 	return out
 }
 
+/** Payment methods a logged-in customer sees (wallet first when it can cover the order). */
+export function enabledMethodsForCustomer(s: StoreSettings, opts: { loggedIn: boolean; balance?: bigint | null; amount?: bigint | null } = { loggedIn: false }): PaymentMethod[] {
+	const base = enabledMethods(s)
+	if (!opts.loggedIn || !s.walletEnabled) return base
+	const balance = opts.balance ?? 0n
+	const amount = opts.amount ?? 0n
+	if (amount > 0n && balance < amount) return base
+	return ["WALLET", ...base]
+}
+
 export function toStoreSettingsDto(s: StoreSettings, customDomain?: string | null) {
 	const { zarinpalMerchant, ...rest } = s
 	const m = merchantOf(s)
 	return {
 		...rest,
+		// BigInt is not JSON-serializable
+		minTopup: s.minTopup.toString(),
 		hasZarinpal: !!m,
 		zarinpalMerchantMasked: m ? `${m.slice(0, 6)}…${m.slice(-4)}` : "",
 		url: storeUrlFor(s, customDomain),
@@ -82,9 +104,10 @@ export function toStoreSettingsDto(s: StoreSettings, customDomain?: string | nul
 export async function updateStoreSettings(actor: Admin, input: StoreSettingsInput): Promise<StoreSettings> {
 	const current = await ensureStoreSettings(actor)
 	const data: Record<string, unknown> = {}
-	for (const k of ["enabled", "title", "description", "rules", "supportUrl", "usdtEnabled", "usdtAddress", "usdtNetwork", "usdtRate", "usdtAutoVerify", "cardEnabled", "cardNumber", "cardHolder", "cardBank", "zarinpalEnabled", "zarinpalSandbox", "requireTelegram", "requirePhone", "paymentTtlMin"] as const) {
+	for (const k of ["enabled", "title", "description", "rules", "supportUrl", "usdtEnabled", "usdtAddress", "usdtNetwork", "usdtRate", "usdtAutoVerify", "cardEnabled", "cardNumber", "cardHolder", "cardBank", "zarinpalEnabled", "zarinpalSandbox", "requireTelegram", "requirePhone", "paymentTtlMin", "accountsEnabled", "guestCheckout", "walletEnabled", "topupBonusPct", "requireEmail", "announcement", "termsUrl", "telegramChannel"] as const) {
 		if (input[k] !== undefined) data[k] = typeof input[k] === "string" ? (input[k] as string).trim() || null : input[k]
 	}
+	if (input.minTopup !== undefined) data.minTopup = BigInt(input.minTopup)
 	if (typeof data.usdtNetwork === "string") data.usdtNetwork = (data.usdtNetwork as string).toUpperCase()
 	if (typeof data.cardNumber === "string") data.cardNumber = (data.cardNumber as string).replace(/[^0-9]/g, "")
 	if (input.slug !== undefined) {
@@ -101,6 +124,8 @@ export async function updateStoreSettings(actor: Admin, input: StoreSettingsInpu
 	if (next.usdtEnabled && (!next.usdtAddress || next.usdtRate <= 0)) throw new AppError("برای فعال کردن USDT آدرس ولت و نرخ تبدیل لازم است")
 	if (next.cardEnabled && !next.cardNumber) throw new AppError("برای فعال کردن کارت‌به‌کارت شماره کارت لازم است")
 	if (next.zarinpalEnabled && !next.zarinpalMerchant) throw new AppError("برای فعال کردن زرین‌پال مرچنت آی‌دی لازم است")
+	if (!next.accountsEnabled && !next.guestCheckout) throw new AppError("حداقل یکی از «حساب مشتری» یا «خرید مهمان» باید فعال باشد")
+	if (next.walletEnabled && !next.accountsEnabled) throw new AppError("کیف پول مشتری بدون فعال بودن حساب مشتری کار نمی‌کند")
 	const saved = await prisma.storeSettings.update({ where: { id: current.id }, data })
 	await audit(actor.id, "store.update", saved.id, { fields: Object.keys(data) })
 	return saved

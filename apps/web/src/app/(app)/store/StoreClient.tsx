@@ -1,10 +1,11 @@
 "use client"
 
 import { useState, type ReactNode } from "react"
-import { CreditCard, ExternalLink, LayoutGrid, Package, Percent, Settings2 } from "lucide-react"
+import { CreditCard, ExternalLink, LayoutGrid, Package, Percent, Settings2, Users } from "lucide-react"
 import { useLocale, useT } from "@/lib/i18n"
 import { Badge, PageHeader, Tabs } from "@/components/ui"
 import { CryptoWallets } from "./CryptoWallets"
+import { CustomersTab } from "./CustomersTab"
 import { DiscountsTab } from "./DiscountsTab"
 import { OverviewTab } from "./OverviewTab"
 import { PaymentsTab } from "./PaymentsTab"
@@ -19,6 +20,7 @@ export function StoreClient({ settings, isOwner, initialTab }: { settings: Store
 		{ id: "overview", label: t("store_tab_overview"), icon: <LayoutGrid className="h-4 w-4" /> },
 		{ id: "plans", label: t("store_tab_plans"), icon: <Package className="h-4 w-4" /> },
 		{ id: "payments", label: tr(locale, "پرداخت‌ها", "Payments"), icon: <CreditCard className="h-4 w-4" /> },
+		{ id: "customers", label: tr(locale, "مشتریان", "Customers"), icon: <Users className="h-4 w-4" /> },
 		{ id: "discounts", label: t("store_tab_discounts"), icon: <Percent className="h-4 w-4" /> },
 		{ id: "settings", label: t("store_tab_settings"), icon: <Settings2 className="h-4 w-4" /> },
 	]
@@ -47,6 +49,7 @@ export function StoreClient({ settings, isOwner, initialTab }: { settings: Store
 					<CryptoWallets />
 				</div>
 			)}
+			{tab === "customers" && <CustomersTab />}
 			{tab === "discounts" && <DiscountsTab />}
 			{tab === "settings" && <SettingsTab initial={settings} />}
 		</div>

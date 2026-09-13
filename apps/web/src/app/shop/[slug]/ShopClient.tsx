@@ -1,11 +1,12 @@
 "use client"
 
 import { useEffect, useRef, useState } from "react"
-import { Check, LifeBuoy, RefreshCw, Send, Sparkles } from "lucide-react"
+import { Check, LifeBuoy, Megaphone, RefreshCw, Send, Sparkles } from "lucide-react"
 import { api } from "@/lib/client"
 import { formatNumber } from "@/lib/format"
 import { Checkout } from "./Checkout"
 import { PlanGrid } from "./PlanGrid"
+import { AccountChip, AuthModal, shopLogout, useShopAccount } from "./ShopAccount"
 import { Faq, Features, Hero, Notice, ShopFooter, Steps, TrustRow } from "./ShopSections"
 import { currencyLabel, socialLinks, type PublicPlan, type PublicStore } from "./types"
 
@@ -21,6 +22,9 @@ type TgWebApp = { initData?: string; ready?: () => void; expand?: () => void }
 export function ShopClient({ store, renewToken, tgParam }: { store: PublicStore; renewToken?: string; tgParam?: string }) {
 	const [plan, setPlan] = useState<PublicPlan | null>(null)
 	const [identity, setIdentity] = useState({ telegramId: tgParam ?? "", name: "", verified: false })
+	const [authOpen, setAuthOpen] = useState(false)
+	const [authMode, setAuthMode] = useState<"login" | "signup">("login")
+	const account = useShopAccount(store.accounts.enabled)
 	const checkoutRef = useRef<HTMLDivElement | null>(null)
 	const currency = currencyLabel(store.currency)
 	const links = socialLinks(store)
@@ -43,6 +47,11 @@ export function ShopClient({ store, renewToken, tgParam }: { store: PublicStore;
 		window.setTimeout(() => checkoutRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 80)
 	}
 
+	function openAuth(mode: "login" | "signup") {
+		setAuthMode(mode)
+		setAuthOpen(true)
+	}
+
 	const style = { "--brand-primary": store.brand.primaryColor, "--brand-accent": store.brand.accentColor } as React.CSSProperties
 
 	return (
@@ -61,10 +70,18 @@ export function ShopClient({ store, renewToken, tgParam }: { store: PublicStore;
 						{store.description || store.brand.tagline ? <p className="truncate text-xs text-muted">{store.description || store.brand.tagline}</p> : null}
 					</div>
 					<div className="ms-auto flex flex-wrap items-center gap-2">
+						<AccountChip store={store} me={account.me} onOpen={() => openAuth("login")} onLogout={async () => { await shopLogout(); await account.reload() }} />
 						{links.support ? <a className="btn btn-ghost btn-sm" href={links.support} target="_blank" rel="noreferrer"><LifeBuoy className="h-4 w-4" /> پشتیبانی</a> : null}
 						{links.tg ? <a className="btn btn-ghost btn-sm" href={links.tg} target="_blank" rel="noreferrer"><Send className="h-4 w-4" /> تلگرام</a> : null}
 					</div>
 				</header>
+
+				{store.announcement ? (
+					<div className="fade-up glass-2 flex items-start gap-2 rounded-xl p-3 text-xs leading-5 text-cyan">
+						<Megaphone className="mt-0.5 h-4 w-4 shrink-0" />
+						<span>{store.announcement}</span>
+					</div>
+				) : null}
 
 				{renewToken || identity.verified ? (
 					<div className="fade-up flex flex-wrap items-center gap-2">
@@ -87,7 +104,7 @@ export function ShopClient({ store, renewToken, tgParam }: { store: PublicStore;
 
 				<div id="checkout" ref={checkoutRef} className="scroll-mt-4">
 					{plan ? (
-						<Checkout store={store} plan={plan} renewToken={renewToken} identity={identity} onChangePlan={() => setPlan(null)} />
+						<Checkout store={store} plan={plan} renewToken={renewToken} identity={identity} me={account.me} onRequireLogin={() => openAuth("login")} onChangePlan={() => setPlan(null)} />
 					) : store.plans.length > 0 ? (
 						<div className="glass p-5 text-center text-sm text-muted">برای ادامه، یکی از پلن‌های بالا را انتخاب کنید.</div>
 					) : null}
@@ -98,6 +115,8 @@ export function ShopClient({ store, renewToken, tgParam }: { store: PublicStore;
 				<Faq store={store} />
 				<ShopFooter store={store} />
 			</div>
+
+			<AuthModal store={store} open={authOpen} mode={authMode} onClose={() => setAuthOpen(false)} onDone={async () => { setAuthOpen(false); await account.reload() }} />
 		</div>
 	)
 }

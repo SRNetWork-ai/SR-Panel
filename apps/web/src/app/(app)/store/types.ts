@@ -1,6 +1,6 @@
 /* shared types + constants for the store screens (mirror API DTOs) */
 export type Method = "USDT" | "CARD" | "ZARINPAL"
-export type Tab = "overview" | "plans" | "payments" | "discounts" | "settings"
+export type Tab = "overview" | "plans" | "payments" | "customers" | "discounts" | "settings"
 
 export type StoreSettings = {
 	id: string
@@ -27,8 +27,34 @@ export type StoreSettings = {
 	requireTelegram: boolean
 	requirePhone: boolean
 	paymentTtlMin: number
+	/* storefront accounts & wallet */
+	accountsEnabled: boolean
+	guestCheckout: boolean
+	walletEnabled: boolean
+	/** BigInt serialized as a string */
+	minTopup: string
+	topupBonusPct: number
+	requireEmail: boolean
+	announcement: string | null
+	termsUrl: string | null
+	telegramChannel: string | null
 	url: string
 	methods: Method[]
+}
+
+/** admin view of a storefront customer account */
+export type CustomerRow = {
+	id: string
+	name: string | null
+	email: string | null
+	phone: string | null
+	telegramId: string | null
+	/** BigInt serialized as a string */
+	credit: string
+	status: "ACTIVE" | "BLOCKED"
+	createdAt: string
+	lastLoginAt: string | null
+	orders: number
 }
 
 export type Target = { serverId: string; inboundId: number; serviceId?: string }

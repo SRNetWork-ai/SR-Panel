@@ -4,7 +4,11 @@
 		"outDir": "dist",
 		"rootDir": "src",
 		"module": "ESNext",
-		"moduleResolution": "Bundler"
+		"moduleResolution": "Bundler",
+		"lib": [
+			"ES2022",
+			"DOM"
+		]
 	},
 	"include": [
 		"src"

@@ -112,6 +112,26 @@ async function bankDeposits() {
 	}
 }
 
+/** Store: drops checkout intents that were never paid. */
+async function paymentExpiry() {
+	try {
+		const n = await expirePayments()
+		if (n) log(`expired ${n} payment(s)`)
+	} catch (err) {
+		warn("expirePayments failed", err)
+	}
+}
+
+/** Store: confirms USDT-TRC20 deposits straight from the chain explorer. */
+async function usdtVerify() {
+	try {
+		const n = await verifyPendingUsdt()
+		if (n) log(`auto-confirmed ${n} USDT payment(s)`)
+	} catch (err) {
+		warn("verifyPendingUsdt failed", err)
+	}
+}
+
 async function main() {
 	await ensureOwner()
 	log(`started (sync every ${INTERVAL}s, TZ=${process.env.TZ})`)
@@ -123,8 +143,8 @@ async function main() {
 		new Cron("*/20 * * * * *", { protect: true }, webhooks),
 		new Cron("0 30 3 * * *", { protect: true }, () => pruneHistory().catch((err) => warn("prune failed", err))),
 		// stage 2B — store
-		new Cron("30 * * * * *", { protect: true }, () => expirePayments().then((n) => n && log(`expired ${n} payment(s)`)).catch((err) => warn("expirePayments failed", err))),
-		new Cron("10 */2 * * * *", { protect: true }, () => verifyPendingUsdt().then((n) => n && log(`auto-confirmed ${n} USDT payment(s)`)).catch((err) => warn("verifyPendingUsdt failed", err))),
+		new Cron("30 * * * * *", { protect: true }, paymentExpiry),
+		new Cron("10 */2 * * * *", { protect: true }, usdtVerify),
 		// automatic FX rate + card-to-card bank bridge
 		new Cron("20 */2 * * * *", { protect: true }, refreshRates),
 		new Cron("40 */2 * * * *", { protect: true }, bankDeposits),

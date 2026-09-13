@@ -38,6 +38,9 @@ export * from "./services/payments"
 export * from "./services/store"
 // editable storefront content (hero / features / steps / FAQ)
 export * from "./services/storePage"
+// storefront customer accounts & customer wallet (stage 2C)
+export * from "./services/customers"
+export * from "./services/storeCustomerPay"
 // in-panel updates
 export * from "./services/updates"
 // automatic FX pricing (named exports only: generic helper names stay module-local)
