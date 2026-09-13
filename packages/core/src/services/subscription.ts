@@ -172,13 +172,10 @@ export async function buildSubscription(subToken: string): Promise<SubscriptionP
 	// additionally return one notice "link" so apps show a reason instead of an empty list.
 	const infoUri = voidConfig(
 		infoRemark({
-			brandName: brand.name,
-			status: client.status,
 			usedBytes,
 			trafficLimit,
 			daysLeft,
-			pending: client.expiresAt === null && (client.status === "ACTIVE" ? usedBytes === 0 : false),
-			serviceName: service?.name ?? null,
+			pending: client.expiresAt === null && client.status === "ACTIVE" && usedBytes === 0,
 		}),
 	)
 	const body = [infoUri, ...(links.length ? links.map((l) => l.uri) : [statusNotice(client.status, brand.name)])].join("\n")
@@ -233,11 +230,6 @@ function humanBytes(bytes: number): string {
 	return Math.max(0, Math.round(mb)) + "MB"
 }
 
-function usageBar(pct: number): string {
-	const filled = Math.max(0, Math.min(10, Math.round(pct / 10)))
-	return "▰".repeat(filled) + "▱".repeat(10 - filled)
-}
-
 function statusLabel(status: string): string {
 	if (status === "EXPIRED") return "منقضی شده"
 	if (status === "LIMITED") return "حجم به پایان رسیده"
@@ -245,23 +237,18 @@ function statusLabel(status: string): string {
 	return "فعال"
 }
 
-/** The single line every app shows as a config name: quota, remaining days, state. */
-function infoRemark(p: { brandName: string; status: string; usedBytes: number; trafficLimit: number; daysLeft: number | null; pending: boolean; serviceName: string | null }): string {
-	const parts: string[] = []
-	if (p.trafficLimit > 0) {
-		const pct = Math.min(100, Math.round((p.usedBytes / p.trafficLimit) * 100))
-		parts.push(usageBar(pct) + " " + pct + "٪")
-		parts.push("مصرف " + humanBytes(p.usedBytes) + " از " + humanBytes(p.trafficLimit))
-		parts.push("باقی " + humanBytes(Math.max(0, p.trafficLimit - p.usedBytes)))
-	} else {
-		parts.push("مصرف " + humanBytes(p.usedBytes) + " • حجم نامحدود")
-	}
-	if (p.daysLeft === null) parts.push(p.pending ? "شروع پس از اولین اتصال" : "بدون تاریخ انقضا")
-	else if (p.daysLeft >= 0) parts.push(p.daysLeft + " روز باقی‌مانده")
-	else parts.push("منقضی شده")
-	if (p.status !== "ACTIVE") parts.push(statusLabel(p.status))
-	if (p.serviceName) parts.push(p.serviceName)
-	return "ℹ️ " + p.brandName + " ➜ " + parts.join(" | ")
+/**
+ * The one short line apps show as a config name. Deliberately minimal — most
+ * clients truncate long remarks — so it only carries traffic and days.
+ * Example: «ℹ️ 12.5GB / 100GB · 23 روز»
+ */
+function infoRemark(p: { usedBytes: number; trafficLimit: number; daysLeft: number | null; pending: boolean }): string {
+	const volume = p.trafficLimit > 0 ? humanBytes(p.usedBytes) + " / " + humanBytes(p.trafficLimit) : humanBytes(p.usedBytes) + " / ∞"
+	let days: string
+	if (p.daysLeft === null) days = p.pending ? "شروع پس از اتصال" : "بدون انقضا"
+	else if (p.daysLeft > 0) days = p.daysLeft + " روز"
+	else days = "منقضی"
+	return "ℹ️ " + volume + " · " + days
 }
 
 function statusNotice(status: string, brandName: string): string {
