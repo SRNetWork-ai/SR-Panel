@@ -14,6 +14,13 @@ import { ServerFormModal } from "./ServerFormModal"
 import { Tilt } from "./Tilt"
 import { tr, type ServerFilter, type ServerSort } from "./types"
 
+type BulkSync = {
+	total: number
+	ok: number
+	failed: Array<{ id: string; name: string; error: string }>
+	servers: ServerDto[]
+}
+
 export function ServersClient({ initial }: { initial: ServerDto[] }) {
 	const t = useT()
 	const locale = useLocale()
@@ -81,10 +88,18 @@ export function ServersClient({ initial }: { initial: ServerDto[] }) {
 		}
 	}
 
+	/** One request for the whole fleet — the server syncs five panels at a time. */
 	async function syncAll() {
 		setSyncingAll(true)
 		try {
-			for (const s of rows) await sync(s)
+			const r = await api<BulkSync>("/api/servers/sync", { method: "POST" })
+			setServers(r.servers)
+			const head = `${r.ok}/${r.total} ${L("سرور همگام شد", "servers synced")}`
+			if (r.failed.length) toast.err(`${head} — ${r.failed.map((f) => f.name).join(", ")}`)
+			else toast.ok(head)
+			router.refresh()
+		} catch (err) {
+			toast.err(err instanceof ApiError ? err.message : t("error_generic"))
 		} finally {
 			setSyncingAll(false)
 		}
