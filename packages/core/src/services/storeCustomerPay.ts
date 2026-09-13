@@ -1,8 +1,8 @@
-import { prisma, type Customer, type Payment, type PaymentMethod } from "@srpanel/db"
+import { prisma, type Customer, type Payment, type PaymentMethod, type StoreSettings } from "@srpanel/db"
 import { AppError, NotFoundError } from "../util/errors"
 import { audit } from "./audit"
-import { beginPayment, type PaymentNext } from "./payments"
-import { enabledMethods } from "./storeSettings"
+import { beginPayment, paymentNext, submitProof, type PaymentNext, type PaymentProof } from "./payments"
+import { enabledMethods, storeSettingsByAdminId } from "./storeSettings"
 
 /**
  * Storefront money flows that need both the payment gateways and the customer
@@ -57,4 +57,69 @@ export async function linkCustomerClients(customerId: string): Promise<number> {
 	if (!ids.length) return 0
 	const r = await prisma.client.updateMany({ where: { id: { in: ids }, customerId: null }, data: { customerId } })
 	return r.count
+}
+
+// ---------------------------------------------------------------------------
+// top-up tracking (the buyer finishes a card/crypto payment on the shop page)
+// ---------------------------------------------------------------------------
+
+export interface CustomerPaymentView {
+	id: string
+	kind: Payment["kind"]
+	method: PaymentMethod
+	status: Payment["status"]
+	amount: string
+	amountUsdt: string | null
+	expiresAt: string | null
+	createdAt: string
+	error: string | null
+	reviewNote: string | null
+	next: PaymentNext
+}
+
+function toCustomerPaymentView(p: Payment, s: StoreSettings | null): CustomerPaymentView {
+	return {
+		id: p.id,
+		kind: p.kind,
+		method: p.method,
+		status: p.status,
+		amount: p.amount.toString(),
+		amountUsdt: p.amountUsdt,
+		expiresAt: p.expiresAt?.toISOString() ?? null,
+		createdAt: p.createdAt.toISOString(),
+		error: p.error,
+		reviewNote: p.reviewNote,
+		next: paymentNext(p, s),
+	}
+}
+
+async function ownPayment(customer: Customer, paymentId: string): Promise<Payment> {
+	const p = await prisma.payment.findUnique({ where: { id: paymentId } })
+	if (!p || p.customerId !== customer.id) throw new NotFoundError("پرداخت پیدا نشد")
+	return p
+}
+
+/** Status + payment instructions of one of the customer's own payments. */
+export async function customerPaymentView(customer: Customer, paymentId: string): Promise<CustomerPaymentView> {
+	const p = await ownPayment(customer, paymentId)
+	return toCustomerPaymentView(p, await storeSettingsByAdminId(p.adminId))
+}
+
+/** Open (payable or under review) wallet top-ups of this customer. */
+export async function listCustomerTopups(customer: Customer, limit = 5): Promise<CustomerPaymentView[]> {
+	const rows = await prisma.payment.findMany({
+		where: { customerId: customer.id, kind: "TOPUP", status: { in: ["PENDING", "REVIEW"] } },
+		orderBy: { createdAt: "desc" },
+		take: Math.min(Math.max(limit, 1), 20),
+	})
+	if (!rows.length) return []
+	const s = await storeSettingsByAdminId(customer.adminId)
+	return rows.map((p) => toCustomerPaymentView(p, s))
+}
+
+/** TXID / receipt reference for a top-up the customer paid. */
+export async function submitCustomerProof(customer: Customer, paymentId: string, proof: PaymentProof): Promise<CustomerPaymentView> {
+	const p = await ownPayment(customer, paymentId)
+	const saved = await submitProof(p.id, proof)
+	return toCustomerPaymentView(saved, await storeSettingsByAdminId(saved.adminId))
 }
