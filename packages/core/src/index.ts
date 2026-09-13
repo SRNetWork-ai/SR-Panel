@@ -26,6 +26,8 @@ export * from "./services/webhooks"
 export * from "./services/notifications"
 export * from "./services/monitoring"
 export * from "./services/backup"
+// smart backups: verified restore + health report
+export * from "./services/backupOps"
 export * from "./services/apikeys"
 export * from "./services/telegramBot"
 // stage 2B
