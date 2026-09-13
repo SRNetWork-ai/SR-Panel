@@ -6,6 +6,7 @@ process.env.TZ ??= process.env.SRP_TZ || "Asia/Tehran"
 import { Cron } from "croner"
 import { prisma } from "@srpanel/db"
 import {
+	activatePendingStarts,
 	autoRefreshRates,
 	autoSyncBankDeposits,
 	backupDueNow,
@@ -50,6 +51,16 @@ async function enforce() {
 		if (n) log(`expired ${n} clients`)
 	} catch (err) {
 		warn("enforce failed", err)
+	}
+}
+
+/** "Start after first use": writes the real expiry once the customer connects. */
+async function delayedStarts() {
+	try {
+		const n = await activatePendingStarts()
+		if (n) log(`delayed start: activated ${n} client(s)`)
+	} catch (err) {
+		warn("delayed start failed", err)
 	}
 }
 
@@ -117,12 +128,15 @@ async function main() {
 		// automatic FX rate + card-to-card bank bridge
 		new Cron("20 */2 * * * *", { protect: true }, refreshRates),
 		new Cron("40 */2 * * * *", { protect: true }, bankDeposits),
+		// delayed start ("start after first use")
+		new Cron("50 * * * * *", { protect: true }, delayedStarts),
 	]
 	const botAbort = new AbortController()
 	const bot = pollTelegram(botAbort.signal, log).catch((err) => warn("telegram bot stopped", err))
 
 	await syncAll()
 	await enforce()
+	await delayedStarts()
 	await refreshRates()
 
 	const stop = async () => {

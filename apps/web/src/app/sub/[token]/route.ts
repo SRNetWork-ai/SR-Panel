@@ -24,6 +24,9 @@ function publicBase(req: NextRequest): string {
  *  - default: base64 body (+ subscription-userinfo headers)
  *  - ?format=links : plain-text list of URIs
  *  - browsers (Accept: text/html) are redirected to the styled page /s/<token>
+ *
+ * The first URI is always the informational (non-dialable) config that shows quota
+ * and expiry inside the app itself.
  */
 export async function GET(req: NextRequest, { params }: { params: Promise<{ token: string }> }) {
 	const { token } = await params
@@ -37,7 +40,8 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ toke
 	if (!payload) return new Response("not found", { status: 404 })
 
 	const format = req.nextUrl.searchParams.get("format")
-	const body = format === "links" ? payload.links.map((l) => l.uri).join("\n") + "\n" : payload.base64
+	const uris = payload.infoUri ? [payload.infoUri, ...payload.links.map((l) => l.uri)] : payload.links.map((l) => l.uri)
+	const body = format === "links" ? uris.join("\n") + "\n" : payload.base64
 	const publicUrl = publicBase(req)
 
 	return new Response(body, {
