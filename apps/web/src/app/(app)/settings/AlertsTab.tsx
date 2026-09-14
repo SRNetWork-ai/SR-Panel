@@ -9,6 +9,7 @@ import { useLocale } from "@/lib/i18n"
 import { Badge, Button, Field, Input, Spinner, cx, useConfirm, useToast } from "@/components/ui"
 import { MiniStat } from "@/components/bits"
 import { Row, Section } from "@/components/parts"
+import { LoginGuardCard } from "./LoginGuardCard"
 import { downloadText, errMsg, tr } from "./types"
 
 type TelegramPolicy = { enabled: boolean; botEnabled: boolean; hasToken: boolean }
@@ -238,6 +239,8 @@ export function AlertsTab() {
 					<p className="text-xs text-danger">{L("خواندن تنظیمات پایش ممکن نشد.", "Could not load monitoring settings.")}</p>
 				)}
 			</Section>
+
+			<LoginGuardCard />
 
 			<div className="grid gap-4 xl:grid-cols-2">
 				<Section icon={Settings2} title={L("سیاست‌های پنل", "Panel policies")} subtitle={L("خلاصهٔ تنظیماتی که در صفحه‌های دیگر ویرایش می‌شوند", "A summary of settings edited on other pages")}>
