@@ -2,6 +2,9 @@ import { randomBytes } from "node:crypto"
 import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { AppError } from "../util/errors"
+import { notify } from "./notifications"
+import { brandName, getUpdateSettings, panelUrl } from "./settings"
+import { tgEscape } from "./telegram"
 
 /**
  * In-panel updates.
@@ -19,6 +22,7 @@ const AGENT_FILE = join(UPDATE_STATE_DIR, "agent.json")
 const REQUEST_FILE = join(UPDATE_DIR, "request.json")
 const STATUS_FILE = join(UPDATE_DIR, "status.json")
 const LATEST_FILE = join(UPDATE_DIR, "latest.json")
+const LAST_FILE = join(UPDATE_DIR, "last.json")
 const LOG_FILE = join(UPDATE_DIR, "update.log")
 
 const AGENT_ONLINE_MS = 45_000
@@ -59,6 +63,20 @@ export type UpdateLatest = {
 	behind: number
 	subject: string
 	error: string | null
+}
+/** What the previous run cost — written by sr-agent ≥ 1.1.0 (update/last.json). */
+export type UpdateLastRun = {
+	id: string
+	at: string
+	ok: boolean
+	durationSec: number
+	buildSec: number
+	skippedBuild: boolean
+	fromCommit: string
+	toCommit: string
+	fromVersion: string
+	toVersion: string
+	agentVersion?: string
 }
 export type UpdatePending = { id: string; action: "check" | "update"; requestedAt: string; requestedBy?: string | null }
 export type UpdateOverview = {
@@ -141,6 +159,11 @@ export async function getUpdateOverview(): Promise<UpdateOverview> {
 	}
 }
 
+/** Duration and outcome of the previous update — used for the “how long will it take” hint. */
+export async function readUpdateLastRun(): Promise<UpdateLastRun | null> {
+	return readJson<UpdateLastRun>(LAST_FILE)
+}
+
 /** Queues a job for the host agent. Throws a friendly AppError when it cannot run. */
 export async function requestUpdateJob(action: "check" | "update", adminId?: string | null): Promise<UpdatePending> {
 	const overview = await getUpdateOverview()
@@ -187,4 +210,73 @@ export async function readUpdateLog(offset = 0): Promise<{ size: number; offset:
 	if (from > buf.length) from = 0
 	if (buf.length - from > LOG_MAX_BYTES) from = buf.length - LOG_MAX_BYTES
 	return { size: buf.length, offset: from, chunk: buf.subarray(from).toString("utf8"), state: job?.state ?? "idle", step: job?.step ?? "" }
+}
+
+/* ---------- automatic updates (worker, hourly) ---------- */
+
+function localHour(): number {
+	const timeZone = process.env.SRP_TZ || "Asia/Tehran"
+	try {
+		return Number(new Intl.DateTimeFormat("en-US", { hour: "2-digit", hour12: false, timeZone }).format(new Date())) % 24
+	} catch {
+		return new Date().getHours()
+	}
+}
+
+export type AutoUpdateResult = { checked: boolean; notified: boolean; installed: boolean; reason?: string }
+
+/**
+ * Hourly worker job: keeps latest.json fresh, tells the owner once per release
+ * that a new version is waiting and — only when the owner asked for it — starts
+ * the install inside the chosen hour. The host agent still does the real work,
+ * and a failed build is rolled back by the agent as usual.
+ */
+export async function autoUpdateTick(): Promise<AutoUpdateResult> {
+	const out: AutoUpdateResult = { checked: false, notified: false, installed: false }
+	const s = await getUpdateSettings()
+	if (!s.autoCheck && !s.autoInstall) return { ...out, reason: "disabled" }
+
+	const overview = await getUpdateOverview()
+	if (!overview.agent?.online) return { ...out, reason: "agent_offline" }
+	if (overview.busy) return { ...out, reason: "busy" }
+
+	const checkedAt = Date.parse(overview.latest?.checkedAt ?? "")
+	const stale = !Number.isFinite(checkedAt) || Date.now() - checkedAt > s.checkEveryHours * 3_600_000
+	if (s.autoCheck && stale) {
+		try {
+			await requestUpdateJob("check")
+			out.checked = true
+		} catch {
+			return { ...out, reason: "check_failed" }
+		}
+		// the agent answers within seconds — the next tick reads the result
+		return out
+	}
+
+	const latest = overview.latest
+	if (!latest || latest.behind <= 0) return { ...out, reason: "up_to_date" }
+
+	if (s.notify) {
+		const lines = [
+			`🆕 <b>نسخهٔ جدید ${tgEscape(brandName())} آماده است</b>`,
+			`📦 فعلی: <code>v${tgEscape(latest.localVersion || overview.version)}</code> (${tgEscape(latest.localCommit)})`,
+			`⬆️ جدید: <code>v${tgEscape(latest.remoteVersion)}</code> (${tgEscape(latest.remoteCommit)}) — ${latest.behind} کامیت جلوتر`,
+		]
+		if (latest.subject) lines.push(`📝 ${tgEscape(latest.subject)}`)
+		lines.push(s.autoInstall ? `🤖 نصب خودکار حدود ساعت ${s.installHour}:00 انجام می‌شود.` : `🔗 ${panelUrl()}/updates`)
+		out.notified = await notify("system.update_available", lines.join("\n"), {
+			dedupeKey: `system.update:${latest.remoteCommit || latest.remoteVersion || latest.behind}`,
+			recipients: { ownerOnly: true },
+		})
+	}
+
+	if (s.autoInstall && localHour() === s.installHour) {
+		try {
+			await requestUpdateJob("update")
+			out.installed = true
+		} catch {
+			return { ...out, reason: "install_failed" }
+		}
+	}
+	return out
 }

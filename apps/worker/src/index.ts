@@ -9,6 +9,7 @@ import {
 	activatePendingStarts,
 	autoRefreshRates,
 	autoSyncBankDeposits,
+	autoUpdateTick,
 	backupDueNow,
 	dispatchWebhooks,
 	enforceClientStatuses,
@@ -105,6 +106,16 @@ async function logPrune() {
 	}
 }
 
+/** In-panel updates: periodic check, “new version” alert and the optional install window. */
+async function autoUpdate() {
+	try {
+		const r = await autoUpdateTick()
+		if (r.checked || r.notified || r.installed) log(`updates: checked=${r.checked} notified=${r.notified} installed=${r.installed}`)
+	} catch (err) {
+		warn("auto update failed", err)
+	}
+}
+
 /** AUTO pricing: keeps each seller's cached USDT rate inside its TTL. */
 async function refreshRates() {
 	try {
@@ -157,6 +168,8 @@ async function main() {
 		new Cron("0 30 3 * * *", { protect: true }, () => pruneHistory().catch((err) => warn("prune failed", err))),
 		// unified log retention
 		new Cron("0 40 3 * * *", { protect: true }, logPrune),
+		// in-panel updates (check / alert / optional install)
+		new Cron("0 25 * * * *", { protect: true }, autoUpdate),
 		// stage 2B — store
 		new Cron("30 * * * * *", { protect: true }, paymentExpiry),
 		new Cron("10 */2 * * * *", { protect: true }, usdtVerify),

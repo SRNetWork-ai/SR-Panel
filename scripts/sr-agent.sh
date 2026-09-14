@@ -15,24 +15,35 @@ SRP_BRANCH="${SRP_BRANCH:-main}"
 # shellcheck disable=SC1090
 [ -f "$CONF" ] && . "$CONF"
 
-AGENT_VERSION="1.0.0"
+AGENT_VERSION="1.1.0"
 STATE="$SRP_DIR/state"
 UPD="$STATE/update"
 REQ="$UPD/request.json"
 ACTIVE="$UPD/request.active.json"
 STATUS="$UPD/status.json"
 LATEST="$UPD/latest.json"
+LAST="$UPD/last.json"
 LOG="$UPD/update.log"
 LOCK="$UPD/.agent.lock"
 POLL="${SRP_AGENT_POLL:-3}"
 MAX_LOG_LINES=1200
+IMAGE="${SRP_IMAGE:-srpanel:latest}"
+
+# BuildKit is what makes the npm / .next cache mounts in the Dockerfile work.
+# Without it every single update recompiles the whole app from scratch.
+export DOCKER_BUILDKIT=1
+export COMPOSE_DOCKER_CLI_BUILD=1
+export BUILDKIT_PROGRESS=plain
 
 JOB_ID=""; JOB_START=""; JOB_END=""
 FROM_C=""; TO_C=""; FROM_V=""; TO_V=""
 AGENT_RESTART=0
+JOB_T0=0; BUILD_SEC=0; SKIP_BUILD=false
 
 now()   { date -u +%Y-%m-%dT%H:%M:%SZ; }
 stamp() { date +%H:%M:%S; }
+secs()  { date +%s; }
+human() { local s="${1:-0}"; if [ "$s" -ge 60 ]; then printf '%dm %02ds' $((s / 60)) $((s % 60)); else printf '%ds' "$s"; fi; }
 esc()   { printf '%s' "${1:-}" | tr -d '\r\n' | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/\t/ /g'; }
 version() { grep -o '"version": *"[^"]*"' "$SRP_DIR/apps/web/package.json" 2>/dev/null | head -1 | sed 's/.*: *"//; s/"//' || true; }
 gitc()  { git -C "$SRP_DIR" "$@"; }
@@ -67,6 +78,13 @@ write_status() { # state step [error]
 	write_json "$STATUS" "{\"id\":\"$(esc "$JOB_ID")\",\"state\":\"$st\",\"step\":\"$(esc "$sp")\",\"at\":\"$(now)\",\"startedAt\":\"$JOB_START\",\"finishedAt\":\"$JOB_END\",\"fromCommit\":\"$FROM_C\",\"toCommit\":\"$TO_C\",\"fromVersion\":\"$(esc "$FROM_V")\",\"toVersion\":\"$(esc "$TO_V")\",\"agentVersion\":\"$AGENT_VERSION\",\"error\":$ej}"
 }
 
+# Duration + outcome of the previous run — the panel turns this into an ETA.
+write_last() { # ok(true|false)
+	local total=0
+	[ "$JOB_T0" -gt 0 ] && total=$(( $(secs) - JOB_T0 ))
+	write_json "$LAST" "{\"id\":\"$(esc "$JOB_ID")\",\"at\":\"$(now)\",\"ok\":${1:-false},\"durationSec\":$total,\"buildSec\":$BUILD_SEC,\"skippedBuild\":$SKIP_BUILD,\"fromCommit\":\"$FROM_C\",\"toCommit\":\"$TO_C\",\"fromVersion\":\"$(esc "$FROM_V")\",\"toVersion\":\"$(esc "$TO_V")\",\"agentVersion\":\"$AGENT_VERSION\"}"
+}
+
 heartbeat() {
 	local c; c=$(gitc rev-parse --short HEAD 2>/dev/null || echo "")
 	write_json "$STATE/agent.json" "{\"agentVersion\":\"$AGENT_VERSION\",\"pid\":$$,\"at\":\"$(now)\",\"dir\":\"$(esc "$SRP_DIR")\",\"branch\":\"$(esc "$SRP_BRANCH")\",\"commit\":\"$c\",\"version\":\"$(esc "$(version)")\",\"poll\":$POLL}"
@@ -79,6 +97,21 @@ jget() { # key file — minimal JSON string reader
 dc() { ( cd "$SRP_DIR" && docker compose --progress plain "$@" ); }
 health() { ( cd "$SRP_DIR" && docker compose exec -T web wget -qO- http://127.0.0.1:3000/api/health 2>/dev/null ) || true; }
 remote_version() { gitc show "origin/$SRP_BRANCH:apps/web/package.json" 2>/dev/null | grep -o '"version": *"[^"]*"' | head -1 | sed 's/.*: *"//; s/"//'; }
+
+# Documentation and host scripts are not part of the image (.dockerignore), so a
+# commit that only touches them never needs a rebuild — that turns a 3 minute
+# update into a 10 second one.
+needs_build() { # $1 = commit we were on before the fetch
+	local from="${1:-}" files
+	docker image inspect "$IMAGE" >/dev/null 2>&1 || return 0
+	have_git || return 0
+	[ -n "$from" ] || return 0
+	files=$(gitc diff --name-only "$from" HEAD 2>/dev/null) || return 0
+	if [ -z "$files" ]; then log "no file changed since $from"; return 1; fi
+	if printf '%s\n' "$files" | grep -qvE '\.md$|^LICENSE$|^\.github/|^docs/|^scripts/'; then return 0; fi
+	log "only docs / host scripts changed: $(printf '%s' "$files" | tr '\n' ' ')"
+	return 1
+}
 
 do_check() {
 	local behind rc rv subj err="" ej="null"
@@ -111,9 +144,10 @@ install_helpers() {
 }
 
 do_update() {
-	local i h=""
+	local i h="" t0
 	mkstate
 	JOB_START="$(now)"; JOB_END=""; TO_C=""; TO_V=""
+	JOB_T0=$(secs); BUILD_SEC=0; SKIP_BUILD=false
 	: > "$LOG"; chmod 666 "$LOG" 2>/dev/null || true
 	FROM_C=$(gitc rev-parse --short HEAD 2>/dev/null || echo "")
 	FROM_V=$(version)
@@ -122,18 +156,19 @@ do_update() {
 	write_status running preflight
 	if ! command -v docker >/dev/null 2>&1; then
 		JOB_END="$(now)"; log "✖ docker is not installed on this host"
-		write_status failed preflight "docker is not available on the server"; return 1
+		write_status failed preflight "docker is not available on the server"; write_last false; return 1
 	fi
 	log "disk free: $(df -h "$SRP_DIR" 2>/dev/null | awk 'NR==2 {print $4}')   memory free: $(free -h 2>/dev/null | awk 'NR==2 {print $7}')"
 
 	step_log "1/5  fetching the new source"
 	write_status running source
+	t0=$(secs)
 	if have_git; then
 		if gitc fetch -q --depth 50 origin "$SRP_BRANCH" >> "$LOG" 2>&1 && gitc reset -q --hard "origin/$SRP_BRANCH" >> "$LOG" 2>&1; then
-			TO_C=$(gitc rev-parse --short HEAD); log "source is now at $TO_C"
+			TO_C=$(gitc rev-parse --short HEAD); log "source is now at $TO_C  ($(human $(( $(secs) - t0 ))))"
 		else
 			JOB_END="$(now)"; log "✖ could not download the new source"
-			write_status failed source "git fetch/reset failed — check the server internet access"; trim_log; return 1
+			write_status failed source "git fetch/reset failed — check the server internet access"; write_last false; trim_log; return 1
 		fi
 	else
 		log "not a git checkout — rebuilding the current files"
@@ -143,38 +178,52 @@ do_update() {
 	step_log "2/5  refreshing the SR helper commands"
 	install_helpers
 
-	step_log "3/5  building the images (this usually takes 2–6 minutes)"
-	write_status running build
-	if ! dc up -d --build --remove-orphans >> "$LOG" 2>&1; then
-		log "✖ build failed — rolling back to ${FROM_C:-the previous state}"
-		write_status running rollback
-		if have_git && [ -n "$FROM_C" ]; then
-			gitc reset -q --hard "$FROM_C" >> "$LOG" 2>&1 || true
-			dc up -d --build --remove-orphans >> "$LOG" 2>&1 || true
-			install_helpers
+	if needs_build "$FROM_C"; then
+		step_log "3/5  building the images (the npm / Next caches are reused)"
+		write_status running build
+		t0=$(secs)
+		if ! dc up -d --build --remove-orphans >> "$LOG" 2>&1; then
+			BUILD_SEC=$(( $(secs) - t0 ))
+			log "✖ build failed after $(human "$BUILD_SEC") — rolling back to ${FROM_C:-the previous state}"
+			write_status running rollback
+			if have_git && [ -n "$FROM_C" ]; then
+				gitc reset -q --hard "$FROM_C" >> "$LOG" 2>&1 || true
+				dc up -d --build --remove-orphans >> "$LOG" 2>&1 || true
+				install_helpers
+			fi
+			TO_C=$(gitc rev-parse --short HEAD 2>/dev/null || echo ""); TO_V=$(version)
+			JOB_END="$(now)"
+			write_status failed build "the build failed and the panel was rolled back — read the log below"; write_last false; trim_log; return 1
 		fi
-		TO_C=$(gitc rev-parse --short HEAD 2>/dev/null || echo ""); TO_V=$(version)
-		JOB_END="$(now)"
-		write_status failed build "the build failed and the panel was rolled back — read the log below"; trim_log; return 1
+		BUILD_SEC=$(( $(secs) - t0 ))
+		log "build finished in $(human "$BUILD_SEC")"
+	else
+		SKIP_BUILD=true
+		step_log "3/5  nothing that affects the image changed — skipping the build"
+		write_status running build
+		dc up -d --remove-orphans >> "$LOG" 2>&1 || true
 	fi
 
 	step_log "4/5  removing old images"
-	docker image prune -f >> "$LOG" 2>&1 || true
+	docker image prune -f --filter "until=48h" >> "$LOG" 2>&1 || true
 
 	step_log "5/5  waiting for the panel to answer"
 	write_status running health
-	for i in $(seq 1 60); do
+	t0=$(secs)
+	for i in $(seq 1 90); do
 		h="$(health)"; [ -n "$h" ] && break
-		sleep 3
+		if [ "$i" -le 30 ]; then sleep 1; else sleep 2; fi
 	done
 	JOB_END="$(now)"
 	if [ -n "$h" ]; then
-		log "✔ health: $h"
-		log "✔ update finished — v${TO_V:-?} (${TO_C:-current})"
+		log "✔ health: $h  (answered after $(human $(( $(secs) - t0 ))))"
+		log "✔ update finished in $(human $(( $(secs) - JOB_T0 ))) — v${TO_V:-?} (${TO_C:-current})"
 		write_status success done
+		write_last true
 	else
 		log "⚠ containers are up but /api/health did not answer yet"
 		write_status failed health "the panel did not answer after the rebuild — try: SR logs web"
+		write_last false
 	fi
 	trim_log
 }
@@ -231,6 +280,7 @@ cmd_status() {
 	if command -v systemctl >/dev/null 2>&1; then printf 'service:   %s\n' "$(systemctl is-active srpanel-agent 2>/dev/null || echo unknown)"; fi
 	[ -f "$STATE/agent.json" ] && { printf 'heartbeat: '; cat "$STATE/agent.json"; }
 	[ -f "$STATUS" ]          && { printf 'last job:  '; cat "$STATUS"; }
+	[ -f "$LAST" ]            && { printf 'last run:  '; cat "$LAST"; }
 	[ -f "$LATEST" ]          && { printf 'latest:    '; cat "$LATEST"; }
 	return 0
 }
