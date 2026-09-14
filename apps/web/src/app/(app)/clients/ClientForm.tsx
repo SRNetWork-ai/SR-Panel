@@ -1,10 +1,11 @@
 "use client"
 
 import Link from "next/link"
-import { useMemo, useState, type FormEvent } from "react"
-import { Hourglass, Layers, Settings2 } from "lucide-react"
+import { useEffect, useMemo, useState, type FormEvent } from "react"
+import { Hourglass, Layers, Settings2, Wallet } from "lucide-react"
 import { ApiError, api } from "@/lib/client"
 import type { ClientDto, ServiceDto } from "@/lib/dto"
+import { formatNumber } from "@/lib/format"
 import { useLocale, useT } from "@/lib/i18n"
 import { Badge, Button, Field, Input, Modal, Textarea, cx, useToast } from "@/components/ui"
 
@@ -22,6 +23,18 @@ type Form = {
 }
 
 type SaveResult = { client: ClientDto; errors: string[] }
+
+/** GET /api/wallet/quote - WalletQuote from @srpanel/core after JSON serialisation. */
+type Quote = {
+	billingEnabled: boolean
+	perGB: number
+	perDay: number
+	cost: number
+	balance: number
+	after: number
+	limits: { remaining: number | null; clientsRemaining: number | null } | null
+	blockers: string[]
+}
 
 /** Mirrors configLabel() in @srpanel/core so the operator sees the real x-ui name. */
 function labelPreview(name: string, tag: string): string {
@@ -58,8 +71,10 @@ export function ClientForm({ client, services, isOwner, onClose, onSaved }: { cl
 	const L = (fa: string, en: string) => (locale === "fa" ? fa : en)
 	const toast = useToast()
 	const creating = client === null
+	const currentGB = client ? client.trafficLimit / 1024 ** 3 : 0
 	const [form, setForm] = useState<Form>(() => initialForm(client, services))
 	const [busy, setBusy] = useState(false)
+	const [quote, setQuote] = useState<Quote | null>(null)
 	const set = <K extends keyof Form>(k: K, v: Form[K]) => setForm((f) => ({ ...f, [k]: v }))
 
 	const selected = useMemo(() => services.find((s) => s.id === form.serviceId) ?? null, [services, form.serviceId])
@@ -67,6 +82,22 @@ export function ClientForm({ client, services, isOwner, onClose, onSaved }: { cl
 	const noServices = services.length === 0
 	const delayed = creating && form.startAfterUse
 	const incomplete = creating && (noServices || !form.serviceId || (form.startAfterUse && Number(form.days) <= 0))
+	const blocked = !isOwner && !!quote && quote.blockers.length > 0
+
+	/** Live receipt for resellers: price, wallet balance after and quota headroom. */
+	useEffect(() => {
+		if (isOwner) return
+		const gb = creating ? Number(form.trafficGB) || 0 : Math.max(0, (Number(form.trafficGB) || 0) - currentGB)
+		const qs = new URLSearchParams({ gb: String(gb), days: String(Math.max(0, Number(form.days) || 0)), quotaGb: String(gb) })
+		if (!creating) qs.set("renew", "1")
+		if (Number(form.trafficGB) === 0) qs.set("unlimited", "1")
+		const id = setTimeout(() => {
+			api<Quote>(`/api/wallet/quote?${qs.toString()}`)
+				.then(setQuote)
+				.catch(() => undefined)
+		}, 300)
+		return () => clearTimeout(id)
+	}, [isOwner, creating, currentGB, form.trafficGB, form.days])
 
 	const submit = async (e: FormEvent) => {
 		e.preventDefault()
@@ -101,7 +132,7 @@ export function ClientForm({ client, services, isOwner, onClose, onSaved }: { cl
 			title={creating ? t("cl_add") : t("cl_edit")}
 			wide
 			footer={
-				<Button variant="primary" type="submit" form="client-form" loading={busy} disabled={incomplete}>
+				<Button variant="primary" type="submit" form="client-form" loading={busy} disabled={incomplete || blocked}>
 					{creating ? t("create") : t("save")}
 				</Button>
 			}
@@ -127,6 +158,36 @@ export function ClientForm({ client, services, isOwner, onClose, onSaved }: { cl
 						<span className="mx-1 opacity-30">|</span>
 						{[30, 60, 90, 180].map((d) => <button key={d} type="button" className={cx("chip", form.days === d && "chip-on")} onClick={() => set("days", d)}>{d} {t("day_short")}</button>)}
 					</div>
+
+					{!isOwner && quote && (quote.billingEnabled || quote.limits) && (
+						<div className={cx("tile space-y-1.5", quote.blockers.length > 0 && "ring-1 ring-danger/40")}>
+							<div className="flex items-center justify-between gap-2">
+								<span className="flex items-center gap-1.5 text-xs font-medium">
+									<Wallet className="h-3.5 w-3.5 text-violet-soft" />
+									{L("هزینه و سهمیه", "Cost & quota")}
+								</span>
+								{quote.billingEnabled ? (
+									<span className="num text-sm font-semibold text-violet-soft">{formatNumber(quote.cost, locale)} {t("currency_irt")}</span>
+								) : (
+									<Badge tone="muted">{t("wal_billing_off")}</Badge>
+								)}
+							</div>
+							{quote.billingEnabled && (
+								<p className="num text-[11px] text-muted">
+									{L("موجودی", "Balance")}: {formatNumber(quote.balance, locale)} → <b className={cx(quote.after < 0 ? "text-danger" : "text-success")}>{formatNumber(quote.after, locale)}</b>
+									{" · "}{formatNumber(quote.perGB, locale)}/GB · {formatNumber(quote.perDay, locale)}/{t("day_short")}
+								</p>
+							)}
+							{quote.limits && (
+								<p className="num text-[11px] text-muted">
+									{L("سهمیهٔ باقی‌مانده", "Quota left")}: {quote.limits.remaining === null ? "∞" : `${formatNumber(Math.max(0, Math.round(quote.limits.remaining / 1024 ** 3)), locale)} GB`}
+									{" · "}{L("ظرفیت کلاینت", "Client slots")}: {quote.limits.clientsRemaining === null ? "∞" : formatNumber(quote.limits.clientsRemaining, locale)}
+								</p>
+							)}
+							{!creating && quote.billingEnabled && <p className="text-[11px] text-muted">{L("فقط ترافیک و روزهای اضافه‌شده محاسبه می‌شود.", "Only added traffic and days are billed.")}</p>}
+							{quote.blockers.map((b) => <p key={b} className="text-[11px] text-danger">• {b}</p>)}
+						</div>
+					)}
 
 					{creating && (
 						<div className={cx("tile space-y-1.5", delayed && "ring-1 ring-violet-soft/40")}>

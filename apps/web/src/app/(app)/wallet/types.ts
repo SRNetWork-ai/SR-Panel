@@ -35,17 +35,33 @@ export type Next =
 	| { type: "done" }
 	| { type: "none" }
 
+/** quota / limits of the signed-in reseller (null for the owner) */
+export type Limits = {
+	trafficQuota: number | null
+	allocated: number
+	remaining: number | null
+	clientLimit: number | null
+	clients: number
+	clientsRemaining: number | null
+	expiresAt: string | null
+	expired: boolean
+}
+
 export type Overview = {
 	balance: number
 	unit: { perGB: number; perDay: number; billingEnabled: boolean }
 	recent: Tx[]
 	pendingTopups: number
 	spent30d: number
+	creditLimit: number
+	lowBalance: number
+	chargeOnRenew: boolean
+	limits: Limits | null
 	topupMethods: Method[]
 	isOwner: boolean
 }
 
-export type Pricing = { billingEnabled: boolean; pricePerGB: number; pricePerDay: number; chargeOnRenew: boolean; creditLimit: number }
+export type Pricing = { billingEnabled: boolean; pricePerGB: number; pricePerDay: number; chargeOnRenew: boolean; creditLimit: number; lowBalance: number }
 
 export type Reseller = {
 	id: string
