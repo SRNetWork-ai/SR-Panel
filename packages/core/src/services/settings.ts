@@ -58,6 +58,21 @@ export const logSettingsSchema = z.object({
 })
 export type LogSettings = z.infer<typeof logSettingsSchema>
 
+/** in-panel updates — the host agent does the real work, this is just the policy */
+export const updateSettingsSchema = z.object({
+	/** let the worker ask the agent for a “check” on its own */
+	autoCheck: z.boolean().default(true),
+	/** how often that automatic check runs */
+	checkEveryHours: z.number().int().min(1).max(168).default(6),
+	/** Telegram alert (owner only) when a newer version is waiting */
+	notify: z.boolean().default(true),
+	/** install a waiting update without asking — a failed build still rolls back */
+	autoInstall: z.boolean().default(false),
+	/** local hour (SRP_TZ) of the automatic install */
+	installHour: z.number().int().min(0).max(23).default(5),
+})
+export type UpdateSettings = z.infer<typeof updateSettingsSchema>
+
 const cache = new Map<string, { at: number; value: unknown }>()
 const TTL_MS = 30_000
 
@@ -82,6 +97,7 @@ export const getTelegramSettings = () => getSetting("telegram", telegramSettings
 export const getBackupSettings = () => getSetting("backup", backupSettingsSchema)
 export const getMonitoringSettings = () => getSetting("monitoring", monitoringSettingsSchema)
 export const getLogSettings = () => getSetting("logs", logSettingsSchema)
+export const getUpdateSettings = () => getSetting("updates", updateSettingsSchema)
 
 /** Public URL of the panel (no trailing slash). */
 export const panelUrl = () => (process.env.SRP_PUBLIC_URL || "http://localhost:3000").replace(/\/+$/, "")
