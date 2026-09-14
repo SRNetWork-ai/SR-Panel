@@ -1,6 +1,6 @@
 import { cookies } from "next/headers"
 import { z } from "zod"
-import { ensureOwner, loginWithPassword } from "@srpanel/core"
+import { ensureOwner, loginGuardState, loginWithPassword, noteLoginLocked } from "@srpanel/core"
 import { ok, parseBody, route } from "@/lib/api"
 import { IDLE_COOKIE, IDLE_MIN_COOKIE, SESSION_COOKIE, clientIp, idleCookieOptions, idleMinutesOf, sessionCookieOptions } from "@/lib/auth"
 
@@ -14,6 +14,14 @@ export const POST = route(async (req) => {
 	const body = await parseBody(req, schema)
 	await ensureOwner().catch(() => undefined)
 	const ip = await clientIp()
+
+	// brute-force guard: refuse before the password is even checked
+	const guard = await loginGuardState(body.username, ip)
+	if (guard.locked) {
+		await noteLoginLocked(body.username, ip, guard)
+		return ok({ ok: false, reason: "locked", retryAfterSec: guard.retryAfterSec })
+	}
+
 	const result = await loginWithPassword({ ...body, ip: ip ?? undefined, userAgent: req.headers.get("user-agent") ?? undefined })
 	if (!result.ok) return ok({ ok: false, reason: result.reason })
 
