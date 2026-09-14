@@ -17,6 +17,7 @@ import {
 	expirePayments,
 	pollTelegram,
 	pruneHistory,
+	pruneLogs,
 	runBackup,
 	runReminders,
 	syncServer,
@@ -92,6 +93,18 @@ async function webhooks() {
 	}
 }
 
+/** Unified log retention (audit / notifications / webhook deliveries / resolved incidents). */
+async function logPrune() {
+	try {
+		const r = await pruneLogs()
+		if (r.skipped) return
+		const total = r.audit + r.notification + r.webhook + r.incident
+		if (total) log(`log prune: audit=${r.audit} notify=${r.notification} webhook=${r.webhook} incident=${r.incident}`)
+	} catch (err) {
+		warn("log prune failed", err)
+	}
+}
+
 /** AUTO pricing: keeps each seller's cached USDT rate inside its TTL. */
 async function refreshRates() {
 	try {
@@ -142,6 +155,8 @@ async function main() {
 		new Cron("0 15 * * * *", { protect: true }, scheduledBackup),
 		new Cron("*/20 * * * * *", { protect: true }, webhooks),
 		new Cron("0 30 3 * * *", { protect: true }, () => pruneHistory().catch((err) => warn("prune failed", err))),
+		// unified log retention
+		new Cron("0 40 3 * * *", { protect: true }, logPrune),
 		// stage 2B — store
 		new Cron("30 * * * * *", { protect: true }, paymentExpiry),
 		new Cron("10 */2 * * * *", { protect: true }, usdtVerify),
