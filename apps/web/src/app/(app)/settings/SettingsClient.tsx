@@ -1,12 +1,13 @@
 "use client"
 
 import { useState } from "react"
-import { Clock, Palette, Settings2, ShieldCheck, Sparkles, Stethoscope, UserCircle2 } from "lucide-react"
+import { Bell, Clock, Palette, Settings2, ShieldCheck, Sparkles, Stethoscope, UserCircle2 } from "lucide-react"
 import type { AdminDto } from "@/lib/dto"
 import { useLocale, useT } from "@/lib/i18n"
 import { Badge, PageHeader } from "@/components/ui"
 import { Tabs, type TabItem } from "@/components/parts"
 import { AccountTab } from "./AccountTab"
+import { AlertsTab } from "./AlertsTab"
 import { AppearanceTab } from "./AppearanceTab"
 import { BrandTab } from "./BrandTab"
 import { SecurityTab } from "./SecurityTab"
@@ -17,14 +18,17 @@ import { tr, type Brand, type SystemInfo, type Tab } from "./types"
 
 export type { SystemInfo } from "./types"
 
-export function SettingsClient({ me, brand: initialBrand, info }: { me: AdminDto; brand: Brand; info: SystemInfo }) {
+export function SettingsClient({ me, brand: initialBrand, info, initialTab }: { me: AdminDto; brand: Brand; info: SystemInfo; initialTab?: Tab }) {
 	const t = useT()
 	const locale = useLocale()
 	const L = (fa: string, en: string) => tr(locale, fa, en)
 	const isOwner = me.role === "OWNER"
-	const [tab, setTab] = useState<Tab>("account")
+	const allowed = initialTab && (initialTab !== "alerts" || isOwner) ? initialTab : "account"
+	const [tab, setTab] = useState<Tab>(allowed)
 	const [brand, setBrand] = useState<Brand>(initialBrand)
 	const [totpOn, setTotpOn] = useState(me.totpEnabled)
+
+	const alertsTab: TabItem<Tab> = { id: "alerts", label: L("هشدار و سیاست‌ها", "Alerts & policies"), icon: Bell }
 
 	const tabs: Array<TabItem<Tab>> = [
 		{ id: "account", label: t("set_account"), icon: UserCircle2 },
@@ -33,6 +37,7 @@ export function SettingsClient({ me, brand: initialBrand, info }: { me: AdminDto
 		{ id: "brand", label: t("set_brand"), icon: Palette },
 		{ id: "appearance", label: t("set_appearance"), icon: Sparkles },
 		{ id: "system", label: L("سیستم", "System"), icon: Settings2 },
+		...(isOwner ? [alertsTab] : []),
 		{ id: "tools", label: L("عیب‌یابی", "Diagnostics"), icon: Stethoscope },
 	]
 
@@ -40,7 +45,7 @@ export function SettingsClient({ me, brand: initialBrand, info }: { me: AdminDto
 		<div className="space-y-6 fade-up">
 			<PageHeader
 				title={t("set_title")}
-				subtitle={L("حساب، امنیت، نشست، برندینگ، ظاهر، سیستم و عیب‌یابی", "Account, security, session, branding, appearance, system and diagnostics")}
+				subtitle={L("حساب، امنیت، نشست، برندینگ، ظاهر، سیستم، هشدارها و عیب‌یابی", "Account, security, session, branding, appearance, system, alerts and diagnostics")}
 				actions={
 					<>
 						<Badge tone={isOwner ? "violet" : "cyan"}>{isOwner ? t("owner") : t("admin")}</Badge>
@@ -57,6 +62,7 @@ export function SettingsClient({ me, brand: initialBrand, info }: { me: AdminDto
 			{tab === "brand" && <BrandTab brand={brand} onChange={setBrand} />}
 			{tab === "appearance" && <AppearanceTab brand={brand} />}
 			{tab === "system" && <SystemTab me={me} info={info} />}
+			{tab === "alerts" && isOwner && <AlertsTab />}
 			{tab === "tools" && <ToolsTab info={info} />}
 		</div>
 	)
