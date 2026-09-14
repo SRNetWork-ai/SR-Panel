@@ -1,22 +1,23 @@
 "use client"
 
 import { useCallback, useEffect, useState } from "react"
-import { ArrowDownCircle, ArrowUpCircle, Coins, Landmark, PlusCircle, RefreshCw, Users, Wallet } from "lucide-react"
+import { AlertTriangle, ArrowDownCircle, ArrowUpCircle, Clock, Coins, Gauge, Landmark, PlusCircle, RefreshCw, Users, Wallet } from "lucide-react"
 import { api } from "@/lib/client"
-import { formatNumber } from "@/lib/format"
+import { formatBytes, formatDate, formatNumber, percent } from "@/lib/format"
 import { useLocale, useT } from "@/lib/i18n"
-import { Button, PageHeader, Stat, Tabs, cx } from "@/components/ui"
+import { Button, Card, PageHeader, Stat, Tabs, cx } from "@/components/ui"
 import { LedgerTab } from "./LedgerTab"
 import { OwnerPanel } from "./OwnerPanel"
 import { TopupModal } from "./TopupModal"
 import { TopupsTab } from "./TopupsTab"
-import type { Overview, Topup, Tx } from "./types"
+import { tr, type Overview, type Topup, type Tx } from "./types"
 
 type Tab = "ledger" | "topups" | "owner"
 
 export function WalletClient({ initial }: { initial: Overview }) {
 	const t = useT()
 	const locale = useLocale()
+	const L = (fa: string, en: string) => tr(locale, fa, en)
 	const [data, setData] = useState<Overview>(initial)
 	const [txs, setTxs] = useState<Tx[] | null>(null)
 	const [topups, setTopups] = useState<Topup[] | null>(null)
@@ -38,6 +39,8 @@ export function WalletClient({ initial }: { initial: Overview }) {
 	}, [refresh])
 
 	const reload = () => refresh().catch(() => undefined)
+	const limits = data.isOwner ? null : data.limits
+	const lowBalance = !data.isOwner && data.lowBalance > 0 && data.balance < data.lowBalance
 
 	return (
 		<div className="space-y-6 fade-up">
@@ -53,6 +56,19 @@ export function WalletClient({ initial }: { initial: Overview }) {
 					</div>
 				}
 			/>
+
+			{lowBalance && (
+				<div className="glass-2 flex items-start gap-2 rounded-xl border border-warning/30 p-3 text-xs text-warning">
+					<AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+					<span className="num">
+						{L("موجودی کیف پول شما از آستانهٔ هشدار کمتر است", "Your wallet balance is below the alert threshold")}
+						{" ("}{formatNumber(data.lowBalance, locale)} {t("currency_irt")}{"). "}
+						{data.creditLimit > 0
+							? L(`سقف بدهی مجاز: ${formatNumber(data.creditLimit, locale)} تومان`, `Credit limit: ${formatNumber(data.creditLimit, locale)}`)
+							: L("برای ساخت سرویس جدید کیف پول را شارژ کنید.", "Top up your wallet to keep creating services.")}
+					</span>
+				</div>
+			)}
 
 			{!data.isOwner && (
 				<div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
@@ -80,6 +96,53 @@ export function WalletClient({ initial }: { initial: Overview }) {
 					/>
 					<Stat label={t("wal_pending_topups")} value={<span className="num">{formatNumber(data.pendingTopups, locale)}</span>} icon={<ArrowDownCircle className="h-5 w-5" />} accent={data.pendingTopups ? "warning" : "success"} />
 				</div>
+			)}
+
+			{limits && (
+				<Card title={L("سهمیه و محدودیت‌های من", "My quota & limits")} subtitle={L("سقف‌هایی که مالک پنل برای حساب شما تعیین کرده است", "Caps the panel owner set for your account")}>
+					<div className="grid gap-3 sm:grid-cols-3">
+						<div className="tile space-y-1.5">
+							<div className="flex items-center justify-between gap-2 text-xs">
+								<span className="flex items-center gap-1.5 font-medium"><Gauge className="h-3.5 w-3.5 text-violet-soft" />{L("سهمیهٔ ترافیک", "Traffic quota")}</span>
+								<span className="num text-muted">{limits.trafficQuota === null ? "∞" : `${formatBytes(limits.allocated)} / ${formatBytes(limits.trafficQuota)}`}</span>
+							</div>
+							{limits.trafficQuota === null ? (
+								<p className="text-[11px] text-muted">{L("سهمیهٔ ترافیک شما نامحدود است.", "Your traffic quota is unlimited.")}</p>
+							) : (
+								<>
+									<div className="h-1.5 overflow-hidden rounded-full bg-white/10">
+										<div className={cx("h-full rounded-full", percent(limits.allocated, limits.trafficQuota) >= 90 ? "bg-danger" : "bg-violet")} style={{ width: `${percent(limits.allocated, limits.trafficQuota)}%` }} />
+									</div>
+									<p className="num text-[11px] text-muted">{L("باقی‌مانده", "Remaining")}: {formatBytes(Math.max(0, limits.remaining ?? 0))}</p>
+								</>
+							)}
+						</div>
+
+						<div className="tile space-y-1.5">
+							<div className="flex items-center justify-between gap-2 text-xs">
+								<span className="flex items-center gap-1.5 font-medium"><Users className="h-3.5 w-3.5 text-violet-soft" />{t("nav_clients")}</span>
+								<span className="num text-muted">{formatNumber(limits.clients, locale)}{limits.clientLimit === null ? " / ∞" : ` / ${formatNumber(limits.clientLimit, locale)}`}</span>
+							</div>
+							<p className="num text-[11px] text-muted">
+								{limits.clientsRemaining === null
+									? L("بدون محدودیت تعداد کلاینت", "No client-count limit")
+									: `${L("ظرفیت باقی‌مانده", "Slots left")}: ${formatNumber(limits.clientsRemaining, locale)}`}
+							</p>
+						</div>
+
+						<div className="tile space-y-1.5">
+							<div className="flex items-center justify-between gap-2 text-xs">
+								<span className="flex items-center gap-1.5 font-medium"><Clock className="h-3.5 w-3.5 text-violet-soft" />{L("اعتبار حساب", "Account validity")}</span>
+								<span className={cx("num", limits.expired ? "text-danger" : "text-muted")}>{limits.expiresAt === null ? "∞" : formatDate(limits.expiresAt, locale)}</span>
+							</div>
+							<p className="num text-[11px] text-muted">
+								{limits.expired
+									? L("حساب شما منقضی شده است؛ امکان ساخت یا تمدید کلاینت وجود ندارد.", "Your account has expired - creating or renewing clients is blocked.")
+									: `${L("سقف بدهی مجاز", "Credit limit")}: ${formatNumber(data.creditLimit, locale)} ${t("currency_irt")}`}
+							</p>
+						</div>
+					</div>
+				</Card>
 			)}
 
 			<Tabs<Tab>
