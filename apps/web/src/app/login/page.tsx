@@ -8,7 +8,9 @@ import { Button, Field, Input } from "@/components/ui"
 import { ApiError, api } from "@/lib/client"
 import { useLocale, useT, type DictKey } from "@/lib/i18n"
 
-type LoginResponse = { ok: true; admin: { id: string; username: string; role: "OWNER" | "ADMIN" } } | { ok: false; reason: "invalid" | "disabled" | "totp_required" | "totp_invalid" }
+type LoginResponse =
+	| { ok: true; admin: { id: string; username: string; role: "OWNER" | "ADMIN" } }
+	| { ok: false; reason: "invalid" | "disabled" | "totp_required" | "totp_invalid" | "locked"; retryAfterSec?: number }
 
 const REASON_KEY: Record<string, DictKey> = {
 	invalid: "login_invalid",
@@ -73,6 +75,12 @@ export default function LoginPage() {
 			}
 			if (r.reason === "totp_required") {
 				setNeedTotp(true)
+				return
+			}
+			if (r.reason === "locked") {
+				const mins = Math.max(1, Math.ceil((r.retryAfterSec ?? 60) / 60))
+				setPassword("")
+				setError(L(`تلاش‌های ناموفق زیاد بود؛ ورود به مدت ${mins} دقیقه قفل شد.`, `Too many failed attempts — login is locked for ${mins} min.`))
 				return
 			}
 			setError(t(REASON_KEY[r.reason] ?? "error_generic"))
