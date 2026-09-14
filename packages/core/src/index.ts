@@ -52,6 +52,8 @@ export * from "./services/serverAdmin"
 // stage 4 — advanced service health & reseller management
 export * from "./services/serviceAdmin"
 export * from "./services/adminAdmin"
+// login brute-force guard + security policy (Setting-backed, no schema change)
+export * from "./services/loginGuard"
 // automatic FX pricing (named exports only: generic helper names stay module-local)
 export {
 	FX_SOURCES,
