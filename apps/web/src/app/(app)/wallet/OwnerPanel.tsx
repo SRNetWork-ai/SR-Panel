@@ -123,6 +123,19 @@ export function OwnerPanel() {
 						>
 							<Input type="number" min={0} value={pricing.lowBalance} onChange={(e) => setPricing({ ...pricing, lowBalance: Number(e.target.value) })} />
 						</Field>
+						<div className={cx("space-y-3", !pricing.billingEnabled && "opacity-60")}>
+							<SubHead
+								title={L("بازگشت وجه در حذف", "Refund on delete")}
+								hint={L("هنگام حذف کلاینت، حجم مصرف‌شده و روزهای گذشته کسر و باقیمانده به کیف پول برمی‌گردد", "On delete the used traffic and elapsed days are deducted and the rest returns to the wallet")}
+							/>
+							<Switch checked={pricing.refundEnabled} onChange={(v) => setPricing({ ...pricing, refundEnabled: v })} label={L("ریفاند فعال باشد", "Refund enabled")} />
+							<Field label={L("درصد بازگشت", "Refund percent")} hint={L("۱۰۰ = کل مبلغ مصرف‌نشده؛ کمتر از آن معنای جریمهٔ لغو دارد", "100 = all of the unused value; less than that acts as a cancellation fee")}>
+								<Input type="number" min={0} max={100} value={pricing.refundPercent} onChange={(e) => setPricing({ ...pricing, refundPercent: Number(e.target.value) })} />
+							</Field>
+							<Field label={`${L("حداقل مبلغ قابل بازگشت", "Minimum refund")} (${t("currency_irt")})`} hint={L("مبالغ کمتر از این مقدار بازگشت داده نمی‌شود (۰ = بدون حداقل)", "Amounts below this are not returned (0 = no minimum)")}>
+								<Input type="number" min={0} value={pricing.refundMin} onChange={(e) => setPricing({ ...pricing, refundMin: Number(e.target.value) })} />
+							</Field>
+						</div>
 						<Button type="submit" variant="primary" loading={saving} className="w-full">{t("save")}</Button>
 					</form>
 				</Card>
