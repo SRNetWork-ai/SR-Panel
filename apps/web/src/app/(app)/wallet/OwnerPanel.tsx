@@ -117,6 +117,12 @@ export function OwnerPanel() {
 							<Field label={`${t("wal_price_day")} (${t("currency_irt")})`}><Input type="number" min={0} value={pricing.pricePerDay} onChange={(e) => setPricing({ ...pricing, pricePerDay: Number(e.target.value) })} /></Field>
 							<Field label={`${t("wal_credit_limit")} (${t("currency_irt")})`} hint={t("wal_credit_limit_hint")}><Input type="number" min={0} value={pricing.creditLimit} onChange={(e) => setPricing({ ...pricing, creditLimit: Number(e.target.value) })} /></Field>
 						</div>
+						<Field
+							label={`${L("هشدار موجودی کم", "Low-balance alert")} (${t("currency_irt")})`}
+							hint={L("اگر موجودی کیف پول یک نماینده از این مقدار پایین‌تر بیاید، پیام تلگرامی به خودش و مالک ارسال می‌شود (۰ = خاموش).", "Telegram warning to the reseller and the owner when a wallet drops below this (0 = off).")}
+						>
+							<Input type="number" min={0} value={pricing.lowBalance} onChange={(e) => setPricing({ ...pricing, lowBalance: Number(e.target.value) })} />
+						</Field>
 						<Button type="submit" variant="primary" loading={saving} className="w-full">{t("save")}</Button>
 					</form>
 				</Card>
