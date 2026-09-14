@@ -28,6 +28,8 @@ export * from "./services/monitoring"
 export * from "./services/backup"
 // smart backups: verified restore + health report
 export * from "./services/backupOps"
+// unified log: audit + notifications + webhooks + incidents + backups in one timeline
+export * from "./services/logs"
 export * from "./services/apikeys"
 export * from "./services/telegramBot"
 // stage 2B
