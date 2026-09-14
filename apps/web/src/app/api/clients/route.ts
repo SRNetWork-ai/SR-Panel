@@ -1,4 +1,4 @@
-import { createClient, listClients } from "@srpanel/core"
+import { assertClientKind, createClient, kindFromGB, listClients } from "@srpanel/core"
 import { ok, parseBody, route } from "@/lib/api"
 import { requireAdmin } from "@/lib/auth"
 import { publicUrl, toClientDto } from "@/lib/dto"
@@ -17,6 +17,9 @@ export const GET = route(async (req) => {
 export const POST = route(async (req) => {
 	const admin = await requireAdmin()
 	const body = await parseBody(req, createClientSchema)
+	// 0 GB means «client unlimited»; the owner decides who may create which type
+	// and which service is offered for it
+	await assertClientKind(admin, kindFromGB(body.trafficGB), body.serviceId ?? null)
 	// the form clears an empty optional field with `null`; core expects it absent
 	const { client, errors } = await createClient(admin, { ...body, note: body.note ?? undefined, telegramId: body.telegramId ?? undefined, phone: body.phone ?? undefined })
 	return ok({ client: toClientDto(client, publicUrl()), errors }, { status: 201 })

@@ -1,4 +1,4 @@
-import { deleteClientWithRefund, getClientForActor, updateClient } from "@srpanel/core"
+import { assertClientKind, deleteClientWithRefund, getClientForActor, kindFromGB, updateClient } from "@srpanel/core"
 import { ok, parseBody, route } from "@/lib/api"
 import { requireAdmin } from "@/lib/auth"
 import { publicUrl, toClientDto } from "@/lib/dto"
@@ -15,6 +15,8 @@ export const PATCH = route<{ id: string }>(async (req, { params }) => {
 	const admin = await requireAdmin()
 	const { id } = await params
 	const body = await parseBody(req, updateClientSchema)
+	// switching a client between «حجمی» and «نامحدود» needs the same permission as creating one
+	if (body.trafficGB !== undefined) await assertClientKind(admin, kindFromGB(body.trafficGB))
 	const { client, errors } = await updateClient(admin, id, body)
 	return ok({ client: toClientDto(client, publicUrl()), errors })
 })

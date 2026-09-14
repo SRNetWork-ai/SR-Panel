@@ -36,6 +36,8 @@ export * from "./services/telegramBot"
 export * from "./services/wallet"
 // pro-rated refunds when a client is deleted (Setting-backed, no schema change)
 export * from "./services/refunds"
+// «client limited» / «client unlimited» permissions per reseller and per service
+export * from "./services/clientTypes"
 export * from "./services/plans"
 export * from "./services/zarinpal"
 export * from "./services/tron"

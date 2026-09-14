@@ -11,12 +11,13 @@ import { useLocale, useT } from "@/lib/i18n"
 import { QR } from "@/components/QR"
 import { Badge, Button, Card, Empty, Input, Modal, PageHeader, Progress, Select, StatusBadge, cx, useConfirm, useToast } from "@/components/ui"
 import { ClientForm } from "./ClientForm"
+import { CreateClient, servicesForKind, type ClientKind, type ClientTypeAccess } from "./CreateClient"
 
 const STATUSES = ["", "ACTIVE", "EXPIRED", "LIMITED", "DISABLED"] as const
 
 type RefundQuote = { amount: number; unusedGB: number; remainingDays: number }
 
-export function ClientsClient({ initial, services, openNew, isOwner }: { initial: { items: ClientDto[]; total: number }; services: ServiceDto[]; openNew: boolean; isOwner: boolean }) {
+export function ClientsClient({ initial, services, access, openNew, isOwner }: { initial: { items: ClientDto[]; total: number }; services: ServiceDto[]; access: ClientTypeAccess; openNew: boolean; isOwner: boolean }) {
 	const t = useT()
 	const locale = useLocale()
 	const L = (fa: string, en: string) => (locale === "fa" ? fa : en)
@@ -29,8 +30,18 @@ export function ClientsClient({ initial, services, openNew, isOwner }: { initial
 	const [q, setQ] = useState("")
 	const [status, setStatus] = useState<string>("")
 	const [loading, setLoading] = useState(false)
-	const [modal, setModal] = useState<"new" | ClientDto | null>(openNew ? "new" : null)
+	// «client limited» / «client unlimited» get their own form; editing keeps the old one
+	const [creating, setCreating] = useState<ClientKind | null>(openNew ? (access.limited ? "LIMITED" : access.unlimited ? "UNLIMITED" : null) : null)
+	const [editing, setEditing] = useState<ClientDto | null>(null)
 	const [qr, setQr] = useState<ClientDto | null>(null)
+
+	const kinds = useMemo(() => {
+		const out: ClientKind[] = []
+		if (access.limited) out.push("LIMITED")
+		if (access.unlimited) out.push("UNLIMITED")
+		return out
+	}, [access.limited, access.unlimited])
+	const kindLabel = (k: ClientKind) => (k === "LIMITED" ? L("کلاینت حجمی", "Limited client") : L("کلاینت نامحدود", "Unlimited client"))
 
 	// live search (debounced)
 	useEffect(() => {
@@ -57,7 +68,8 @@ export function ClientsClient({ initial, services, openNew, isOwner }: { initial
 		} else {
 			setItems((l) => l.map((x) => (x.id === c.id ? c : x)))
 		}
-		setModal(null)
+		setCreating(null)
+		setEditing(null)
 		router.refresh()
 	}
 
@@ -92,10 +104,11 @@ export function ClientsClient({ initial, services, openNew, isOwner }: { initial
 		}
 		if (!confirm(`${t("delete")} «${c.name}» — ${t("confirm_delete")}${extra}`)) return
 		try {
-			const r = await api<{ errors: string[]; refund: RefundQuote | null }>(`/api/clients/${c.id}`, { method: "DELETE" })
+			// DELETE returns the credited amount as a plain number (0 when nothing came back)
+			const r = await api<{ errors: string[]; refund: number }>(`/api/clients/${c.id}`, { method: "DELETE" })
 			setItems((l) => l.filter((x) => x.id !== c.id))
 			setTotal((n) => n - 1)
-			if (r.refund && r.refund.amount > 0) toast.ok(`${L("ریفاند شد", "Refunded")}: ${formatNumber(r.refund.amount, locale)} ${t("currency_irt")}`)
+			if (r.refund > 0) toast.ok(`${L("ریفاند شد", "Refunded")}: ${formatNumber(r.refund, locale)} ${t("currency_irt")}`)
 			else if (r.errors?.length) toast.err(r.errors.join(" | "))
 			router.refresh()
 		} catch (err) {
@@ -110,7 +123,24 @@ export function ClientsClient({ initial, services, openNew, isOwner }: { initial
 
 	return (
 		<div>
-			<PageHeader title={`${t("cl_title")} (${total})`} subtitle={t("cl_sub")} actions={<Button variant="primary" onClick={() => setModal("new")}><UserPlus className="h-4 w-4" />{t("cl_add")}</Button>} />
+			<PageHeader
+				title={`${t("cl_title")} (${total})`}
+				subtitle={t("cl_sub")}
+				actions={
+					kinds.length === 0 ? (
+						<span className="text-xs text-warning">{L("مالک به شما اجازهٔ ساخت کلاینت نداده است", "The owner has not granted client creation")}</span>
+					) : (
+						<div className="flex flex-wrap gap-2">
+							{kinds.map((k, i) => (
+								<Button key={k} variant={i === 0 ? "primary" : "ghost"} onClick={() => setCreating(k)}>
+									<UserPlus className="h-4 w-4" />
+									{kindLabel(k)}
+								</Button>
+							))}
+						</div>
+					)
+				}
+			/>
 
 			<div className="mb-4 flex flex-wrap items-center gap-2">
 				<div className="relative min-w-56 flex-1">
@@ -126,7 +156,7 @@ export function ClientsClient({ initial, services, openNew, isOwner }: { initial
 
 			<Card bodyClassName="px-0 pb-0" className={cx(loading && "opacity-70")}>
 				{items.length === 0 ? (
-					<Empty text={t("cl_empty")} action={<Button variant="primary" size="sm" onClick={() => setModal("new")}><Plus className="h-4 w-4" />{t("cl_add")}</Button>} />
+					<Empty text={t("cl_empty")} action={kinds.length > 0 ? <Button variant="primary" size="sm" onClick={() => setCreating(kinds[0] ?? null)}><Plus className="h-4 w-4" />{t("cl_add")}</Button> : undefined} />
 				) : (
 					<div className="table-wrap">
 						<table className="table">
@@ -156,6 +186,7 @@ export function ClientsClient({ initial, services, openNew, isOwner }: { initial
 												<div className="flex flex-wrap items-center gap-1.5">
 													{c.tag && <Badge tone="violet">{c.tag}</Badge>}
 													<Link href={`/clients/${c.id}`} className="font-medium hover:text-violet-soft">{c.name}</Link>
+													{c.trafficLimit === 0 && <Badge tone="muted">{L("نامحدود", "Unlimited")}</Badge>}
 												</div>
 												{c.note && <div className="max-w-48 truncate text-[11px] text-muted">{c.note}</div>}
 											</td>
@@ -182,7 +213,7 @@ export function ClientsClient({ initial, services, openNew, isOwner }: { initial
 												<div className="flex justify-end gap-1">
 													<Button size="icon" variant="ghost" title={t("copy")} onClick={() => copySub(c)}><Copy className="h-4 w-4" /></Button>
 													<Button size="icon" variant="ghost" title={t("cl_qr")} onClick={() => setQr(c)}><QrCode className="h-4 w-4" /></Button>
-													<Button size="icon" variant="ghost" title={t("edit")} onClick={() => setModal(c)}><Pencil className="h-4 w-4" /></Button>
+													<Button size="icon" variant="ghost" title={t("edit")} onClick={() => setEditing(c)}><Pencil className="h-4 w-4" /></Button>
 													<Button size="icon" variant="ghost" title={t("cl_reset")} onClick={() => reset(c)}><RotateCcw className="h-4 w-4" /></Button>
 													<Button size="sm" variant="ghost" onClick={() => toggle(c)}>{c.status === "DISABLED" ? t("cl_enable") : t("cl_disable")}</Button>
 													<Button size="icon" variant="danger" title={t("delete")} onClick={() => remove(c)}><Trash2 className="h-4 w-4" /></Button>
@@ -197,14 +228,26 @@ export function ClientsClient({ initial, services, openNew, isOwner }: { initial
 				)}
 			</Card>
 
-			{/* create / edit - service only, no inbound picker */}
-			{modal !== null && (
+			{/* create — one form per client type, services filtered by what the owner offers */}
+			{creating !== null && (
+				<CreateClient
+					key={creating}
+					kind={creating}
+					services={servicesForKind(services, access, creating)}
+					isOwner={isOwner}
+					onClose={() => setCreating(null)}
+					onSaved={saved}
+				/>
+			)}
+
+			{/* edit — service only, no inbound picker */}
+			{editing !== null && (
 				<ClientForm
-					key={modal === "new" ? "new" : modal.id}
-					client={modal === "new" ? null : modal}
+					key={editing.id}
+					client={editing}
 					services={services}
 					isOwner={isOwner}
-					onClose={() => setModal(null)}
+					onClose={() => setEditing(null)}
 					onSaved={saved}
 				/>
 			)}
