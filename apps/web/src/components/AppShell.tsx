@@ -3,7 +3,7 @@
 import Link from "next/link"
 import { usePathname, useRouter } from "next/navigation"
 import { useEffect, useState, type ReactNode } from "react"
-import { Activity, ArrowDownToLine, DatabaseBackup, Globe2, Layers, LayoutDashboard, LogOut, Menu, MoreHorizontal, Moon, Plug, ScrollText, Server, Settings, ShieldCheck, ShoppingCart, Store, Sun, Users, Wallet, X } from "lucide-react"
+import { Activity, ArrowDownToLine, DatabaseBackup, Globe2, Layers, LayoutDashboard, LogOut, Menu, MoreHorizontal, Moon, Plug, ScrollText, Server, Settings, ShieldCheck, ShoppingCart, SlidersHorizontal, Store, Sun, Users, Wallet, X } from "lucide-react"
 import { api } from "@/lib/client"
 import { useLocale, useT } from "@/lib/i18n"
 import type { DictKey } from "@/lib/dict"
@@ -51,6 +51,7 @@ const GROUPS: NavGroup[] = [
 		label: ["مدیریت", "Administration"],
 		items: [
 			{ href: "/admins", key: "nav_admins", icon: ShieldCheck, owner: true },
+			{ href: "/client-types", label: ["انواع کلاینت", "Client types"], short: ["انواع", "Types"], icon: SlidersHorizontal, owner: true },
 			{ href: "/backups", key: "nav_backups", icon: DatabaseBackup, owner: true },
 			{ href: "/integrations", key: "nav_integrations", icon: Plug },
 			{ href: "/audit", key: "nav_audit", icon: ScrollText, owner: true },
