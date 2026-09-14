@@ -6,13 +6,15 @@ import { useEffect, useMemo, useState } from "react"
 import { Copy, Pencil, Plus, QrCode, RotateCcw, Search, Trash2, UserPlus } from "lucide-react"
 import { ApiError, api, copyText } from "@/lib/client"
 import type { ClientDto, ServiceDto } from "@/lib/dto"
-import { daysLeft, formatBytes, percent, relativeTime } from "@/lib/format"
+import { daysLeft, formatBytes, formatNumber, percent, relativeTime } from "@/lib/format"
 import { useLocale, useT } from "@/lib/i18n"
 import { QR } from "@/components/QR"
 import { Badge, Button, Card, Empty, Input, Modal, PageHeader, Progress, Select, StatusBadge, cx, useConfirm, useToast } from "@/components/ui"
 import { ClientForm } from "./ClientForm"
 
 const STATUSES = ["", "ACTIVE", "EXPIRED", "LIMITED", "DISABLED"] as const
+
+type RefundQuote = { amount: number; unusedGB: number; remainingDays: number }
 
 export function ClientsClient({ initial, services, openNew, isOwner }: { initial: { items: ClientDto[]; total: number }; services: ServiceDto[]; openNew: boolean; isOwner: boolean }) {
 	const t = useT()
@@ -78,11 +80,24 @@ export function ClientsClient({ initial, services, openNew, isOwner }: { initial
 		}
 	}
 	const remove = async (c: ClientDto) => {
-		if (!confirm(`${t("delete")} «${c.name}» — ${t("confirm_delete")}`)) return
+		// preview: how much of the purchase comes back to the wallet
+		let extra = ""
 		try {
-			await api(`/api/clients/${c.id}`, { method: "DELETE" })
+			const pre = await api<RefundQuote>(`/api/clients/${c.id}/refund`)
+			if (pre.amount > 0) {
+				extra = ` — ${L("بازگشت به کیف پول", "Wallet refund")}: ${formatNumber(pre.amount, locale)} ${t("currency_irt")} (${formatNumber(pre.unusedGB, locale)} GB · ${formatNumber(pre.remainingDays, locale)} ${t("days")})`
+			}
+		} catch {
+			/* preview is optional */
+		}
+		if (!confirm(`${t("delete")} «${c.name}» — ${t("confirm_delete")}${extra}`)) return
+		try {
+			const r = await api<{ errors: string[]; refund: RefundQuote | null }>(`/api/clients/${c.id}`, { method: "DELETE" })
 			setItems((l) => l.filter((x) => x.id !== c.id))
 			setTotal((n) => n - 1)
+			if (r.refund && r.refund.amount > 0) toast.ok(`${L("ریفاند شد", "Refunded")}: ${formatNumber(r.refund.amount, locale)} ${t("currency_irt")}`)
+			else if (r.errors?.length) toast.err(r.errors.join(" | "))
+			router.refresh()
 		} catch (err) {
 			toast.err(err instanceof ApiError ? err.message : t("error_generic"))
 		}

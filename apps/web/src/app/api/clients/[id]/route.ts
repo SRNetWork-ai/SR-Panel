@@ -1,4 +1,4 @@
-import { deleteClient, getClientForActor, updateClient } from "@srpanel/core"
+import { deleteClientWithRefund, getClientForActor, updateClient } from "@srpanel/core"
 import { ok, parseBody, route } from "@/lib/api"
 import { requireAdmin } from "@/lib/auth"
 import { publicUrl, toClientDto } from "@/lib/dto"
@@ -19,9 +19,10 @@ export const PATCH = route<{ id: string }>(async (req, { params }) => {
 	return ok({ client: toClientDto(client, publicUrl()), errors })
 })
 
+/** Deleting also returns the unused part of the purchase to the reseller wallet. */
 export const DELETE = route<{ id: string }>(async (_req, { params }) => {
 	const admin = await requireAdmin()
 	const { id } = await params
-	const errors = await deleteClient(admin, id)
-	return ok({ ok: true, errors })
+	const { errors, refund } = await deleteClientWithRefund(admin, id)
+	return ok({ ok: true, errors, refund })
 })

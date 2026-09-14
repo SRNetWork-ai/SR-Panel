@@ -34,6 +34,8 @@ export * from "./services/apikeys"
 export * from "./services/telegramBot"
 // stage 2B
 export * from "./services/wallet"
+// pro-rated refunds when a client is deleted (Setting-backed, no schema change)
+export * from "./services/refunds"
 export * from "./services/plans"
 export * from "./services/zarinpal"
 export * from "./services/tron"

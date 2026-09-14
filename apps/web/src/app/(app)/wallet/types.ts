@@ -61,7 +61,18 @@ export type Overview = {
 	isOwner: boolean
 }
 
-export type Pricing = { billingEnabled: boolean; pricePerGB: number; pricePerDay: number; chargeOnRenew: boolean; creditLimit: number; lowBalance: number }
+/** pricing + refund policy (two Setting keys, one owner form) */
+export type Pricing = {
+	billingEnabled: boolean
+	pricePerGB: number
+	pricePerDay: number
+	chargeOnRenew: boolean
+	creditLimit: number
+	lowBalance: number
+	refundEnabled: boolean
+	refundPercent: number
+	refundMin: number
+}
 
 export type Reseller = {
 	id: string
