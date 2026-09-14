@@ -47,6 +47,17 @@ export const monitoringSettingsSchema = z.object({
 })
 export type MonitoringSettings = z.infer<typeof monitoringSettingsSchema>
 
+/** unified log retention — 0 means “keep forever” for that source */
+export const logSettingsSchema = z.object({
+	auditKeepDays: z.number().int().min(0).max(3650).default(180),
+	notifyKeepDays: z.number().int().min(0).max(3650).default(90),
+	webhookKeepDays: z.number().int().min(0).max(3650).default(30),
+	incidentKeepDays: z.number().int().min(0).max(3650).default(365),
+	/** let the worker prune every night */
+	autoPrune: z.boolean().default(true),
+})
+export type LogSettings = z.infer<typeof logSettingsSchema>
+
 const cache = new Map<string, { at: number; value: unknown }>()
 const TTL_MS = 30_000
 
@@ -70,6 +81,7 @@ export async function setSetting<S extends z.ZodTypeAny>(key: string, schema: S,
 export const getTelegramSettings = () => getSetting("telegram", telegramSettingsSchema)
 export const getBackupSettings = () => getSetting("backup", backupSettingsSchema)
 export const getMonitoringSettings = () => getSetting("monitoring", monitoringSettingsSchema)
+export const getLogSettings = () => getSetting("logs", logSettingsSchema)
 
 /** Public URL of the panel (no trailing slash). */
 export const panelUrl = () => (process.env.SRP_PUBLIC_URL || "http://localhost:3000").replace(/\/+$/, "")
