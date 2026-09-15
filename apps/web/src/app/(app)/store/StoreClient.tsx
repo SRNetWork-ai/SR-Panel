@@ -1,9 +1,10 @@
 "use client"
 
 import { useState, type ReactNode } from "react"
-import { CreditCard, ExternalLink, LayoutGrid, Package, Percent, Settings2, Users } from "lucide-react"
+import { CreditCard, ExternalLink, Layers, LayoutGrid, Package, Percent, Settings2, Users } from "lucide-react"
 import { useLocale, useT } from "@/lib/i18n"
 import { Badge, PageHeader, Tabs } from "@/components/ui"
+import { CatalogTab } from "./CatalogTab"
 import { CryptoWallets } from "./CryptoWallets"
 import { CustomersTab } from "./CustomersTab"
 import { DiscountsTab } from "./DiscountsTab"
@@ -19,6 +20,7 @@ export function StoreClient({ settings, isOwner, initialTab }: { settings: Store
 	const tabs: Array<{ id: Tab; label: string; icon: ReactNode }> = [
 		{ id: "overview", label: t("store_tab_overview"), icon: <LayoutGrid className="h-4 w-4" /> },
 		{ id: "plans", label: t("store_tab_plans"), icon: <Package className="h-4 w-4" /> },
+		{ id: "catalog", label: tr(locale, "دسته‌بندی و آپشن‌ها", "Categories & options"), icon: <Layers className="h-4 w-4" /> },
 		{ id: "payments", label: tr(locale, "پرداخت‌ها", "Payments"), icon: <CreditCard className="h-4 w-4" /> },
 		{ id: "customers", label: tr(locale, "مشتریان", "Customers"), icon: <Users className="h-4 w-4" /> },
 		{ id: "discounts", label: t("store_tab_discounts"), icon: <Percent className="h-4 w-4" /> },
@@ -43,6 +45,7 @@ export function StoreClient({ settings, isOwner, initialTab }: { settings: Store
 			<Tabs tabs={tabs} value={tab} onChange={setTab} />
 			{tab === "overview" && <OverviewTab onGoto={setTab} />}
 			{tab === "plans" && <PlansTab isOwner={isOwner} />}
+			{tab === "catalog" && <CatalogTab />}
 			{tab === "payments" && (
 				<div className="space-y-5">
 					<PaymentsTab initial={settings} />

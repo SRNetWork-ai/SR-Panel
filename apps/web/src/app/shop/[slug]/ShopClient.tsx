@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { Check, LifeBuoy, Megaphone, RefreshCw, Send, Sparkles } from "lucide-react"
 import { api } from "@/lib/client"
 import { formatNumber } from "@/lib/format"
@@ -8,7 +8,7 @@ import { Checkout } from "./Checkout"
 import { PlanGrid } from "./PlanGrid"
 import { AccountChip, AuthModal, shopLogout, useShopAccount } from "./ShopAccount"
 import { Faq, Features, Hero, Notice, ShopFooter, Steps, TrustRow } from "./ShopSections"
-import { currencyLabel, socialLinks, type PublicPlan, type PublicStore } from "./types"
+import { currencyLabel, EMPTY_CATALOG, socialLinks, visiblePlans, type PublicPlan, type PublicStore, type ShopCatalog } from "./types"
 
 /** Kept for existing importers of the old single-file storefront. */
 export type { PublicPlan, PublicStore } from "./types"
@@ -19,7 +19,7 @@ type TgWebApp = { initData?: string; ready?: () => void; expand?: () => void }
  * Public storefront shell: brand header, marketing sections, plan grid and the
  * checkout form. Everything below the plan grid is seller-editable content.
  */
-export function ShopClient({ store, renewToken, tgParam }: { store: PublicStore; renewToken?: string; tgParam?: string }) {
+export function ShopClient({ store, catalog, renewToken, tgParam, planParam }: { store: PublicStore; catalog?: ShopCatalog; renewToken?: string; tgParam?: string; planParam?: string }) {
 	const [plan, setPlan] = useState<PublicPlan | null>(null)
 	const [identity, setIdentity] = useState({ telegramId: tgParam ?? "", name: "", verified: false })
 	const [authOpen, setAuthOpen] = useState(false)
@@ -28,6 +28,9 @@ export function ShopClient({ store, renewToken, tgParam }: { store: PublicStore;
 	const checkoutRef = useRef<HTMLDivElement | null>(null)
 	const currency = currencyLabel(store.currency)
 	const links = socialLinks(store)
+	const shopCatalog = catalog ?? EMPTY_CATALOG
+	// plans marked "hidden" leave the public list but stay buyable by direct link
+	const shown = useMemo(() => visiblePlans(store.plans, shopCatalog, plan ? plan.id : null), [store.plans, shopCatalog, plan])
 
 	// Telegram Mini-App: verify initData server-side and prefill the identity
 	useEffect(() => {
@@ -41,6 +44,13 @@ export function ShopClient({ store, renewToken, tgParam }: { store: PublicStore;
 			})
 			.catch(() => undefined)
 	}, [])
+
+	// deep link (?plan=<id>) preselects a plan, including a hidden one
+	useEffect(() => {
+		if (!planParam) return
+		const found = store.plans.find((p) => p.id === planParam)
+		if (found) setPlan(found)
+	}, [planParam, store.plans])
 
 	function pick(p: PublicPlan) {
 		setPlan(p)
@@ -97,15 +107,15 @@ export function ShopClient({ store, renewToken, tgParam }: { store: PublicStore;
 				<section id="plans" className="fade-up scroll-mt-4 space-y-3">
 					<div className="flex flex-wrap items-center justify-between gap-2">
 						<div className="flex items-center gap-2 text-sm font-semibold"><Sparkles className="h-4 w-4 text-violet" /> انتخاب پلن</div>
-						{store.plans.length > 0 ? <span className="num text-[11px] text-muted">{formatNumber(store.plans.length, "fa")} پلن فعال</span> : null}
+						{shown.length > 0 ? <span className="num text-[11px] text-muted">{formatNumber(shown.length, "fa")} پلن فعال</span> : null}
 					</div>
-					<PlanGrid plans={store.plans} selectedId={plan ? plan.id : null} currency={currency} onSelect={pick} />
+					<PlanGrid plans={shown} selectedId={plan ? plan.id : null} currency={currency} catalog={shopCatalog} onSelect={pick} />
 				</section>
 
 				<div id="checkout" ref={checkoutRef} className="scroll-mt-4">
 					{plan ? (
 						<Checkout store={store} plan={plan} renewToken={renewToken} identity={identity} me={account.me} onRequireLogin={() => openAuth("login")} onChangePlan={() => setPlan(null)} />
-					) : store.plans.length > 0 ? (
+					) : shown.length > 0 ? (
 						<div className="glass p-5 text-center text-sm text-muted">برای ادامه، یکی از پلن‌های بالا را انتخاب کنید.</div>
 					) : null}
 				</div>

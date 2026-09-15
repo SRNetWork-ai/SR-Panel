@@ -48,6 +48,8 @@ export * from "./services/payments"
 export * from "./services/store"
 // editable storefront content (hero / features / steps / FAQ)
 export * from "./services/storePage"
+// storefront catalogue: plan categories + extended per-plan options
+export * from "./services/storeCatalog"
 // storefront customer accounts & customer wallet (stage 2C)
 export * from "./services/customers"
 export * from "./services/storeCustomerPay"

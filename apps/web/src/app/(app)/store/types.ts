@@ -1,6 +1,6 @@
 /* shared types + constants for the store screens (mirror API DTOs) */
 export type Method = "USDT" | "CARD" | "ZARINPAL"
-export type Tab = "overview" | "plans" | "payments" | "customers" | "discounts" | "settings"
+export type Tab = "overview" | "plans" | "catalog" | "payments" | "customers" | "discounts" | "settings"
 
 export type StoreSettings = {
 	id: string
@@ -275,6 +275,49 @@ export type PageDto = {
 }
 
 export type StoreExtras = { fx: FxDto; card: CardDto; page: PageDto }
+
+/* ---------- plan categories + extended plan options (Setting-backed) ---------- */
+
+export type CatalogCategory = { id: string; name: string; description: string; icon: StorePageIcon; sortOrder: number; isActive: boolean }
+
+export type PlanOptions = {
+	categoryId: string
+	ribbon: string
+	highlight: boolean
+	hidden: boolean
+	features: string[]
+	note: string
+	/** 0 = unlimited */
+	stock: number
+	/** 0 = unlimited, per storefront account */
+	perCustomer: number
+}
+
+export type CatalogDto = { enabled: boolean; showCounts: boolean; categories: CatalogCategory[]; items: Record<string, PlanOptions> }
+
+export const emptyPlanOptions = (): PlanOptions => ({ categoryId: "", ribbon: "", highlight: false, hidden: false, features: [], note: "", stock: 0, perCustomer: 0 })
+
+export const newCatalogCategory = (index: number): CatalogCategory => ({
+	id: `cat_${Math.random().toString(36).slice(2, 8)}${index}`,
+	name: "",
+	description: "",
+	icon: "star",
+	sortOrder: (index + 1) * 10,
+	isActive: true,
+})
+
+export const ICON_LABEL: Record<StorePageIcon, { fa: string; en: string }> = {
+	shield: { fa: "امنیت", en: "Shield" },
+	bolt: { fa: "سرعت", en: "Bolt" },
+	globe: { fa: "جهانی", en: "Globe" },
+	headset: { fa: "پشتیبانی", en: "Support" },
+	infinity: { fa: "نامحدود", en: "Unlimited" },
+	lock: { fa: "قفل", en: "Lock" },
+	device: { fa: "دستگاه‌ها", en: "Devices" },
+	star: { fa: "ویژه", en: "Star" },
+	clock: { fa: "زمان", en: "Clock" },
+	wallet: { fa: "کیف پول", en: "Wallet" },
+}
 
 export const ORDER_TONE: Record<string, "success" | "warning" | "danger" | "muted" | "violet" | "cyan"> = { PENDING: "warning", PAID: "cyan", FULFILLED: "success", CANCELED: "muted", EXPIRED: "danger" }
 export const ORDER_STATUSES = ["PENDING", "PAID", "FULFILLED", "CANCELED", "EXPIRED"]
