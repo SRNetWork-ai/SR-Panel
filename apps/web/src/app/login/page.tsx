@@ -1,12 +1,12 @@
 "use client"
 
 import { useRouter } from "next/navigation"
-import { useEffect, useState, type FormEvent, type KeyboardEvent as ReactKeyboardEvent } from "react"
-import { Eye, EyeOff, Globe2, Info, KeyRound, LockKeyhole, Moon, Server, ShieldCheck, Sun, UserRound, Wallet, Zap } from "lucide-react"
-import { Logo } from "@/components/Logo"
+import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent as ReactKeyboardEvent } from "react"
+import { Clock, Eye, EyeOff, Info, KeyRound, LockKeyhole, ShieldCheck, UserRound } from "lucide-react"
 import { Button, Field, Input } from "@/components/ui"
 import { ApiError, api } from "@/lib/client"
 import { useLocale, useT, type DictKey } from "@/lib/i18n"
+import { LoginAside, LoginTopBar } from "./LoginAside"
 
 type LoginResponse =
 	| { ok: true; admin: { id: string; username: string; role: "OWNER" | "ADMIN" } }
@@ -18,9 +18,26 @@ const REASON_KEY: Record<string, DictKey> = {
 	totp_invalid: "login_totp_invalid",
 }
 
-function setCookie(name: string, value: string) {
-	document.cookie = `${name}=${value}; path=/; max-age=${60 * 60 * 24 * 365}; samesite=lax`
+/** last operator name, so a returning admin only types the password */
+const USER_KEY = "srp_login_user"
+
+const FA_DIGITS = "۰۱۲۳۴۵۶۷۸۹"
+const AR_DIGITS = "٠١٢٣٤٥٦٧٨٩"
+
+/** Persian/Arabic digits (keyboard or paste) become ASCII before they are sent. */
+const onlyDigits = (v: string) =>
+	v
+		.replace(/[۰-۹]/g, (d) => String(FA_DIGITS.indexOf(d)))
+		.replace(/[٠-٩]/g, (d) => String(AR_DIGITS.indexOf(d)))
+		.replace(/\D/g, "")
+
+/** Same-origin paths only, so `?next=` can never bounce to another site. */
+function safeNext(raw: string | null): string {
+	if (!raw || !raw.startsWith("/") || raw.startsWith("//") || raw.startsWith("/login")) return "/dashboard"
+	return raw
 }
+
+const mmss = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`
 
 export default function LoginPage() {
 	const t = useT()
@@ -31,26 +48,41 @@ export default function LoginPage() {
 	const [password, setPassword] = useState("")
 	const [showPass, setShowPass] = useState(false)
 	const [caps, setCaps] = useState(false)
+	const [remember, setRemember] = useState(false)
 	const [totp, setTotp] = useState("")
 	const [needTotp, setNeedTotp] = useState(false)
 	const [error, setError] = useState<string | null>(null)
+	const [notice, setNotice] = useState<"idle" | "out" | null>(null)
+	const [lockSec, setLockSec] = useState(0)
+	const [next, setNext] = useState("/dashboard")
 	const [busy, setBusy] = useState(false)
-	const [light, setLight] = useState(false)
+	const autoSent = useRef("")
+	const locked = lockSec > 0
 
+	// the query string is read on the client, so the page stays statically renderable
 	useEffect(() => {
-		setLight(document.documentElement.classList.contains("light"))
+		const q = new URLSearchParams(window.location.search)
+		setNext(safeNext(q.get("next")))
+		const reason = q.get("reason")
+		if (reason === "idle" || reason === "out") setNotice(reason)
+		try {
+			const saved = window.localStorage.getItem(USER_KEY)
+			if (saved) {
+				setUsername(saved)
+				setRemember(true)
+			}
+		} catch {
+			/* storage blocked */
+		}
 	}, [])
 
-	const switchLang = () => {
-		setCookie("srp_lang", locale === "fa" ? "en" : "fa")
-		router.refresh()
-	}
-	const switchTheme = () => {
-		const next = !light
-		setLight(next)
-		document.documentElement.classList.toggle("light", next)
-		setCookie("srp_theme", next ? "light" : "dark")
-	}
+	// live countdown of the brute-force lock
+	useEffect(() => {
+		if (!locked) return
+		const id = window.setInterval(() => setLockSec((s) => Math.max(0, s - 1)), 1000)
+		return () => window.clearInterval(id)
+	}, [locked])
+
 	const trackCaps = (e: ReactKeyboardEvent<HTMLInputElement>) => {
 		try {
 			setCaps(e.getModifierState("CapsLock"))
@@ -59,17 +91,24 @@ export default function LoginPage() {
 		}
 	}
 
-	const submit = async (e: FormEvent) => {
-		e.preventDefault()
+	const login = async () => {
+		if (busy || locked) return
 		setBusy(true)
 		setError(null)
+		setNotice(null)
 		try {
 			const r = await api<LoginResponse>("/api/auth/login", {
 				method: "POST",
 				json: { username: username.trim().toLowerCase(), password, totp: needTotp && totp ? totp : undefined },
 			})
 			if (r.ok) {
-				router.replace("/dashboard")
+				try {
+					if (remember) window.localStorage.setItem(USER_KEY, username.trim().toLowerCase())
+					else window.localStorage.removeItem(USER_KEY)
+				} catch {
+					/* storage blocked */
+				}
+				router.replace(next)
 				router.refresh()
 				return
 			}
@@ -78,25 +117,34 @@ export default function LoginPage() {
 				return
 			}
 			if (r.reason === "locked") {
-				const mins = Math.max(1, Math.ceil((r.retryAfterSec ?? 60) / 60))
 				setPassword("")
-				setError(L(`تلاش‌های ناموفق زیاد بود؛ ورود به مدت ${mins} دقیقه قفل شد.`, `Too many failed attempts — login is locked for ${mins} min.`))
+				setTotp("")
+				setLockSec(Math.min(3600, Math.max(30, Math.round(r.retryAfterSec ?? 60))))
 				return
 			}
 			setError(t(REASON_KEY[r.reason] ?? "error_generic"))
 			if (r.reason === "totp_invalid") setTotp("")
 		} catch (err) {
-			setError(err instanceof ApiError ? err.message : t("error_generic"))
+			if (typeof navigator !== "undefined" && !navigator.onLine) setError(L("اتصال اینترنت قطع است؛ شبکه را بررسی کن.", "You are offline — check your connection."))
+			else setError(err instanceof ApiError ? err.message : t("error_generic"))
 		} finally {
 			setBusy(false)
 		}
 	}
 
-	const features = [
-		{ icon: Server, title: L("مدیریت چندسروره", "Multi-server control"), sub: L("همه پنل‌های 3x-ui در یک داشبورد", "Every 3x-ui panel in one dashboard") },
-		{ icon: Zap, title: L("ساخت سریع کانفیگ", "Instant config delivery"), sub: L("لینک و اشتراک با دامنهٔ درست هر اینباند", "Links built from each inbound's own domain") },
-		{ icon: Wallet, title: L("فروش و کیف پول", "Sales & wallet"), sub: L("پلن، سفارش و پرداخت خودکار", "Plans, orders and automated payments") },
-	]
+	// a complete 6-digit code is sent on its own (paste or authenticator autofill)
+	useEffect(() => {
+		if (!needTotp || totp.length !== 6 || busy || locked) return
+		if (autoSent.current === totp) return
+		autoSent.current = totp
+		void login()
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [needTotp, totp, busy, locked])
+
+	const submit = (e: FormEvent) => {
+		e.preventDefault()
+		void login()
+	}
 
 	return (
 		<main className="srp-auth relative">
@@ -104,47 +152,10 @@ export default function LoginPage() {
 			<div className="srp-orb srp-orb-a" />
 			<div className="srp-orb srp-orb-b" />
 
-			<div className="mx-auto flex w-full max-w-6xl items-center justify-between gap-2 px-4">
-				<Logo compact className="lg:hidden" />
-				<div className="hidden lg:block">
-					<Logo />
-				</div>
-				<div className="flex items-center gap-1.5">
-					<button type="button" onClick={switchLang} className="btn btn-ghost btn-sm" title={t("language")} aria-label={t("language")}>
-						<Globe2 className="h-4 w-4" />
-						<span className="text-xs">{locale === "fa" ? "EN" : "فا"}</span>
-					</button>
-					<button type="button" onClick={switchTheme} className="btn btn-ghost btn-sm" title={t("theme_toggle")} aria-label={t("theme_toggle")}>
-						{light ? <Moon className="h-4 w-4" /> : <Sun className="h-4 w-4" />}
-					</button>
-				</div>
-			</div>
+			<LoginTopBar />
 
 			<div className="mx-auto grid w-full max-w-6xl flex-1 items-center gap-10 px-4 py-6 lg:grid-cols-[1.05fr_.95fr] lg:gap-14 lg:py-10">
-				{/* brand story - desktop only */}
-				<section className="hidden lg:block">
-					<span className="inline-flex items-center gap-1 rounded-full border border-violet/30 bg-violet/15 px-2.5 py-0.5 text-[11px] font-semibold text-violet">{L("نسخهٔ ابری", "Cloud edition")}</span>
-					<h1 className="mt-4 text-4xl font-black leading-[1.15]">
-						<span className="neon-text">{t("login_title")}</span>
-					</h1>
-					<p className="mt-3 max-w-md text-sm leading-7 text-muted">{t("login_sub")}</p>
-					<div className="mt-9 grid max-w-lg gap-5">
-						{features.map((f) => {
-							const Icon = f.icon
-							return (
-								<div key={f.title} className="srp-feature">
-									<span className="srp-ico-pill">
-										<Icon className="h-5 w-5" />
-									</span>
-									<div className="pt-1">
-										<div className="text-sm font-semibold">{f.title}</div>
-										<div className="mt-0.5 text-xs leading-5 text-muted">{f.sub}</div>
-									</div>
-								</div>
-							)
-						})}
-					</div>
-				</section>
+				<LoginAside />
 
 				{/* sign-in card */}
 				<section className="w-full justify-self-center lg:justify-self-end">
@@ -153,6 +164,17 @@ export default function LoginPage() {
 							<h2 className="text-lg font-bold sm:text-xl">{needTotp ? t("totp_code") : t("login_title")}</h2>
 							<p className="mt-1 text-xs leading-5 text-muted sm:text-sm">{needTotp ? t("totp_hint") : t("login_sub")}</p>
 						</div>
+
+						{notice || next !== "/dashboard" ? (
+							<div className="mb-4 flex items-start gap-2 rounded-xl border border-cyan/30 bg-cyan/10 px-3 py-2 text-xs leading-5 text-cyan">
+								<Info className="mt-0.5 h-4 w-4 shrink-0" />
+								<span>
+									{notice === "idle" ? L("به‌دلیل بی‌کاری طولانی از حساب خارج شدی.", "You were signed out after being idle for a while.") : notice === "out" ? L("از حساب خارج شدی.", "You have been signed out.") : null}
+									{notice && next !== "/dashboard" ? " " : null}
+									{next !== "/dashboard" ? L("بعد از ورود به همان صفحهٔ درخواستی برمی‌گردی.", "You will return to the page you requested.") : null}
+								</span>
+							</div>
+						) : null}
 
 						<form onSubmit={submit} className="space-y-4">
 							{!needTotp ? (
@@ -169,6 +191,7 @@ export default function LoginPage() {
 												autoCorrect="off"
 												spellCheck={false}
 												enterKeyHint="next"
+												autoFocus
 												required
 												value={username}
 												onChange={(e) => setUsername(e.target.value)}
@@ -205,6 +228,10 @@ export default function LoginPage() {
 											</div>
 										</Field>
 										{caps && <p className="text-[11px] text-amber-400">{L("کلید Caps Lock روشن است", "Caps Lock is on")}</p>}
+										<label className="flex cursor-pointer select-none items-center gap-2 pt-0.5 text-xs text-muted">
+											<input type="checkbox" className="h-4 w-4 accent-violet" checked={remember} onChange={(e) => setRemember(e.target.checked)} />
+											{L("نام کاربری را به خاطر بسپار", "Remember my username")}
+										</label>
 									</div>
 								</>
 							) : (
@@ -232,10 +259,20 @@ export default function LoginPage() {
 												enterKeyHint="go"
 												required
 												value={totp}
-												onChange={(e) => setTotp(e.target.value.replace(/\D/g, "").slice(0, 6))}
+												onChange={(e) => setTotp(onlyDigits(e.target.value).slice(0, 6))}
 											/>
 										</div>
 									</Field>
+								</div>
+							)}
+
+							{locked && (
+								<div role="alert" className="flex items-start gap-2 rounded-xl border border-amber-400/30 bg-amber-400/10 px-3 py-2 text-sm text-amber-400">
+									<Clock className="mt-0.5 h-4 w-4 shrink-0" />
+									<span>
+										{L("تلاش‌های ناموفق زیاد بود؛ ورود موقتاً قفل شد.", "Too many failed attempts — sign-in is locked.")}{" "}
+										<span className="mono" dir="ltr">{mmss(lockSec)}</span>
+									</span>
 								</div>
 							)}
 
@@ -246,8 +283,8 @@ export default function LoginPage() {
 								</div>
 							)}
 
-							<Button type="submit" variant="primary" className="w-full" loading={busy} disabled={busy || (needTotp && totp.length !== 6)}>
-								{t("sign_in")}
+							<Button type="submit" variant="primary" className="w-full" loading={busy} disabled={busy || locked || (needTotp && totp.length !== 6)}>
+								{locked ? L("ورود قفل است", "Sign-in locked") : t("sign_in")}
 							</Button>
 
 							{needTotp && (
@@ -258,6 +295,7 @@ export default function LoginPage() {
 										setNeedTotp(false)
 										setTotp("")
 										setError(null)
+										autoSent.current = ""
 									}}
 								>
 									{t("cancel")}
