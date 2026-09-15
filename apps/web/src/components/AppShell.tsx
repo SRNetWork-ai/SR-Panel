@@ -257,13 +257,13 @@ export function AppShell({ user, brandName, theme, children }: { user: ShellUser
 					const active = isActive(n.href)
 					const Icon = n.icon
 					return (
-						<Link key={n.href} href={n.href} aria-current={active ? "page" : undefined} className={cx("srp-tab", active && "is-active")}>
+						<Link key={n.href} href={n.href} aria-current={active ? "page" : undefined} className={cx("srp-navtab", active && "is-active")}>
 							<Icon className="h-5 w-5" />
 							<span>{tabLabel(n)}</span>
 						</Link>
 					)
 				})}
-				<button type="button" onClick={() => setOpen(true)} className="srp-tab" aria-label={L("همهٔ منوها", "All menus")}>
+				<button type="button" onClick={() => setOpen(true)} className="srp-navtab" aria-label={L("همهٔ منوها", "All menus")}>
 					<MoreHorizontal className="h-5 w-5" />
 					<span>{L("بیشتر", "More")}</span>
 				</button>
