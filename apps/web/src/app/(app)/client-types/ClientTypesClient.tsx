@@ -5,13 +5,16 @@ import { Infinity as InfinityIcon, Gauge, Save, Users } from "lucide-react"
 import { ApiError, api } from "@/lib/client"
 import type { ServiceDto } from "@/lib/dto"
 import { useLocale, useT } from "@/lib/i18n"
-import { Badge, Button, Card, PageHeader, cx, useToast } from "@/components/ui"
+import { Badge, Button, Card, Field, Input, PageHeader, cx, useToast } from "@/components/ui"
 
 type ServiceKind = "BOTH" | "LIMITED" | "UNLIMITED"
-type KindAccess = { limited: boolean; unlimited: boolean }
+/** `unlimitedMax` and `limitedMaxGB` use 0 for «no cap». */
+type KindAccess = { limited: boolean; unlimited: boolean; unlimitedMax: number; limitedMaxGB: number }
 type Settings = {
 	defaultLimited: boolean
 	defaultUnlimited: boolean
+	defaultUnlimitedMax: number
+	defaultLimitedMaxGB: number
 	admins: Record<string, KindAccess>
 	services: Record<string, ServiceKind>
 }
@@ -35,11 +38,11 @@ export function ClientTypesClient({ settings, services }: { settings: Settings; 
 
 	const setAdmin = (id: string, patch: Partial<KindAccess>) =>
 		setSt((s) => {
-			const cur = s.admins[id] ?? { limited: s.defaultLimited, unlimited: s.defaultUnlimited }
+			const cur = s.admins[id] ?? { limited: s.defaultLimited, unlimited: s.defaultUnlimited, unlimitedMax: s.defaultUnlimitedMax, limitedMaxGB: s.defaultLimitedMaxGB }
 			return { ...s, admins: { ...s.admins, [id]: { ...cur, ...patch } } }
 		})
 	const setServiceKind = (id: string, kind: ServiceKind) => setSt((s) => ({ ...s, services: { ...s.services, [id]: kind } }))
-	const accessOf = (id: string): KindAccess => st.admins[id] ?? { limited: st.defaultLimited, unlimited: st.defaultUnlimited }
+	const accessOf = (id: string): KindAccess => st.admins[id] ?? { limited: st.defaultLimited, unlimited: st.defaultUnlimited, unlimitedMax: st.defaultUnlimitedMax, limitedMaxGB: st.defaultLimitedMaxGB }
 	const kindOf = (id: string): ServiceKind => st.services[id] ?? "BOTH"
 
 	const save = async () => {
@@ -62,6 +65,21 @@ export function ClientTypesClient({ settings, services }: { settings: Settings; 
 		</label>
 	)
 
+	/** 0 = no cap, so it is shown as an empty box with a placeholder instead of a zero. */
+	const numBox = (value: number, onChange: (v: number) => void, className?: string) => (
+		<Input
+			type="number"
+			min={0}
+			step={1}
+			inputMode="numeric"
+			dir="ltr"
+			className={cx("num", className)}
+			value={value === 0 ? "" : String(value)}
+			placeholder={L("\u0628\u062f\u0648\u0646 \u0645\u062d\u062f\u0648\u062f\u06cc\u062a", "No limit")}
+			onChange={(e) => onChange(Math.max(0, Math.floor(Number(e.target.value) || 0)))}
+		/>
+	)
+
 	const KINDS: { key: ServiceKind; fa: string; en: string }[] = [
 		{ key: "BOTH", fa: "هر دو", en: "Both" },
 		{ key: "LIMITED", fa: "فقط حجمی", en: "Limited only" },
@@ -72,7 +90,7 @@ export function ClientTypesClient({ settings, services }: { settings: Settings; 
 		<div className="space-y-4">
 			<PageHeader
 				title={L("انواع کلاینت", "Client types")}
-				subtitle={L("مشخص کنید هر نماینده بتواند کلاینت حجمی یا نامحدود بسازد و هر سرویس برای کدام نوع ارائه شود", "Choose which resellers may create limited or unlimited clients, and which type each service is offered for")}
+				subtitle={L("مشخص کنید هر نماینده بتواند کلاینت حجمی یا نامحدود بسازد، با چه سقفی، و هر سرویس برای کدام نوع ارائه شود", "Choose which resellers may create limited or unlimited clients, with which caps, and which type each service is offered for")}
 				actions={
 					<Button variant="primary" onClick={save} loading={busy}>
 						<Save className="h-4 w-4" />
@@ -90,7 +108,16 @@ export function ClientTypesClient({ settings, services }: { settings: Settings; 
 					{check(st.defaultLimited, (v) => setSt((s) => ({ ...s, defaultLimited: v })), L("ساخت کلاینت حجمی", "May create limited clients"))}
 					{check(st.defaultUnlimited, (v) => setSt((s) => ({ ...s, defaultUnlimited: v })), L("ساخت کلاینت نامحدود", "May create unlimited clients"))}
 				</div>
-				<p className="mt-2 text-[11px] text-muted">{L("مالک همیشه هر دو نوع را می‌سازد. تغییرات تا ۳۰ ذانیه طول می‌کشد تا روی پنل نماینده اعمال شود.", "The owner may always create both. Changes can take up to 30 seconds to reach a reseller panel.")}</p>
+				<div className="mt-3 grid gap-3 sm:grid-cols-2">
+					<Field label={L("\u0633\u0642\u0641 \u062a\u0639\u062f\u0627\u062f \u06a9\u0644\u0627\u06cc\u0646\u062a \u0646\u0627\u0645\u062d\u062f\u0648\u062f", "Max unlimited clients")} hint={L("\u06f0 \u06cc\u0627 \u062e\u0627\u0644\u06cc = \u0628\u062f\u0648\u0646 \u0645\u062d\u062f\u0648\u062f\u06cc\u062a", "0 or empty = no limit")}>
+						{numBox(st.defaultUnlimitedMax, (v) => setSt((s) => ({ ...s, defaultUnlimitedMax: v })), "w-full")}
+					</Field>
+					<Field label={L("\u062d\u062f\u0627\u06a9\u062b\u0631 \u062d\u062c\u0645 \u0647\u0631 \u06a9\u0644\u0627\u06cc\u0646\u062a \u062d\u062c\u0645\u06cc (GB)", "Max GB per limited client")} hint={L("\u06f0 \u06cc\u0627 \u062e\u0627\u0644\u06cc = \u0628\u062f\u0648\u0646 \u0645\u062d\u062f\u0648\u062f\u06cc\u062a", "0 or empty = no limit")}>
+						{numBox(st.defaultLimitedMaxGB, (v) => setSt((s) => ({ ...s, defaultLimitedMaxGB: v })), "w-full")}
+					</Field>
+				</div>
+				<p className="mt-2 text-[11px] text-muted">{L("مالک همیشه هر دو نوع را می‌سازد و سقفی ندارد. تغییرات تا ۳۰ ثانیه طول می‌کشد تا روی پنل نماینده اعمال شود.", "The owner may always create both and has no caps. Changes can take up to 30 seconds to reach a reseller panel.")}</p>
+				<p className="mt-1 text-[11px] text-muted">{L("\u0633\u0642\u0641\u200c\u0647\u0627 \u0647\u0646\u06af\u0627\u0645 \u0633\u0627\u062e\u062a \u0648 \u0648\u06cc\u0631\u0627\u06cc\u0634 \u06a9\u0644\u0627\u06cc\u0646\u062a \u0628\u0631\u0631\u0633\u06cc \u0645\u06cc\u200c\u0634\u0648\u0646\u062f.", "Caps are enforced when a client is created or edited.")}</p>
 			</Card>
 
 			<Card bodyClassName="px-0 pb-0">
@@ -108,6 +135,8 @@ export function ClientTypesClient({ settings, services }: { settings: Settings; 
 									<th>{L("نماینده", "Reseller")}</th>
 									<th>{L("حجمی", "Limited")}</th>
 									<th>{L("نامحدود", "Unlimited")}</th>
+									<th>{L("\u0633\u0642\u0641 \u0646\u0627\u0645\u062d\u062f\u0648\u062f", "Unlimited cap")}</th>
+									<th>{L("\u062d\u062c\u0645 \u0647\u0631 \u06a9\u0644\u0627\u06cc\u0646\u062a (GB)", "GB per client")}</th>
 									<th>{L("وضعیت", "State")}</th>
 								</tr>
 							</thead>
@@ -125,6 +154,8 @@ export function ClientTypesClient({ settings, services }: { settings: Settings; 
 											</td>
 											<td>{check(a.limited, (v) => setAdmin(r.id, { limited: v }), L("مجاز", "Allowed"))}</td>
 											<td>{check(a.unlimited, (v) => setAdmin(r.id, { unlimited: v }), L("مجاز", "Allowed"))}</td>
+											<td>{numBox(a.unlimitedMax, (v) => setAdmin(r.id, { unlimitedMax: v }), "w-24")}</td>
+											<td>{numBox(a.limitedMaxGB, (v) => setAdmin(r.id, { limitedMaxGB: v }), "w-24")}</td>
 											<td>
 												<div className="flex flex-wrap items-center gap-1.5">
 													{!r.isActive && <Badge tone="danger">{L("غیرفعال", "Disabled")}</Badge>}

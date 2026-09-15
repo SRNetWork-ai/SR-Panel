@@ -15,8 +15,9 @@ export const PATCH = route<{ id: string }>(async (req, { params }) => {
 	const admin = await requireAdmin()
 	const { id } = await params
 	const body = await parseBody(req, updateClientSchema)
-	// switching a client between «حجمی» and «نامحدود» needs the same permission as creating one
-	if (body.trafficGB !== undefined) await assertClientKind(admin, kindFromGB(body.trafficGB))
+	// switching a client between «حجمی» and «نامحدود» — or resizing it — needs the
+	// same permission and the same caps as creating one; the client itself is excluded
+	if (body.trafficGB !== undefined) await assertClientKind(admin, kindFromGB(body.trafficGB), null, { trafficGB: body.trafficGB, excludeClientId: id })
 	const { client, errors } = await updateClient(admin, id, body)
 	return ok({ client: toClientDto(client, publicUrl()), errors })
 })
