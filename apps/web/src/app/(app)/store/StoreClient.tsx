@@ -5,7 +5,6 @@ import { CreditCard, ExternalLink, Layers, LayoutGrid, Package, Percent, Setting
 import { useLocale, useT } from "@/lib/i18n"
 import { Badge, PageHeader, Tabs } from "@/components/ui"
 import { CatalogTab } from "./CatalogTab"
-import { CryptoWallets } from "./CryptoWallets"
 import { CustomersTab } from "./CustomersTab"
 import { DiscountsTab } from "./DiscountsTab"
 import { OverviewTab } from "./OverviewTab"
@@ -46,12 +45,7 @@ export function StoreClient({ settings, isOwner, initialTab }: { settings: Store
 			{tab === "overview" && <OverviewTab onGoto={setTab} />}
 			{tab === "plans" && <PlansTab isOwner={isOwner} />}
 			{tab === "catalog" && <CatalogTab />}
-			{tab === "payments" && (
-				<div className="space-y-5">
-					<PaymentsTab initial={settings} />
-					<CryptoWallets />
-				</div>
-			)}
+			{tab === "payments" && <PaymentsTab initial={settings} />}
 			{tab === "customers" && <CustomersTab />}
 			{tab === "discounts" && <DiscountsTab />}
 			{tab === "settings" && <SettingsTab initial={settings} />}
