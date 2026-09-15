@@ -10,7 +10,7 @@ import { audit } from "./audit"
 import { clearPendingStart, getPendingStart, pendingExpiryMs, setPendingStart, withPendingNote } from "./pendingStart"
 import { adapterFor, inboundsOf, recomputeClient } from "./servers"
 import { resolveServiceTargets } from "./services"
-import { assertAffordable, chargeWallet, quoteClientCost } from "./wallet"
+import { assertAffordable, chargeWallet, getPricingSettings, quoteClientCost } from "./wallet"
 
 export interface ClientTarget {
 	serverId: string
@@ -382,7 +382,7 @@ export async function updateClient(actor: Admin, id: string, input: UpdateClient
 		const extraGB = input.trafficGB !== undefined ? Math.max(0, input.trafficGB - bytesToGb(current.trafficLimit)) : 0
 		const extraDays = input.addDays ? Math.max(0, input.addDays) : 0
 		if (extraGB > 0 || extraDays > 0) {
-			deltaCost = await quoteClientCost(actor, extraGB, extraDays)
+        deltaCost = (await getPricingSettings()).chargeOnRenew ? await quoteClientCost(actor, extraGB, extraDays) : 0n
 			await assertAffordable(actor, deltaCost)
 		}
 	}
