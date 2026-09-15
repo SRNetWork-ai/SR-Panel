@@ -1,5 +1,5 @@
 import { z } from "zod"
-import { createOrder } from "@srpanel/core"
+import { assertPlanPurchasable, createOrder } from "@srpanel/core"
 import { ok, parseBody, route } from "@/lib/api"
 import { clientIp } from "@/lib/auth"
 import { shopOrderSchema } from "@/lib/schemas"
@@ -15,6 +15,8 @@ export const POST = route<{ slug: string }>(async (req, ctx) => {
 	const body = await parseBody(req, orderSchema)
 	// the order is attached to the account and the contact info is prefilled from it
 	const customer = await currentCustomer()
+	// catalogue limits: sold-out stock and the per-account purchase cap
+	await assertPlanPurchasable(slug, body.planId, customer?.id ?? null)
 	const r = await createOrder(slug, {
 		planId: body.planId,
 		method: body.method,
