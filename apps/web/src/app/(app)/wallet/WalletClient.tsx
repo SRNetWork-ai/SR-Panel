@@ -1,18 +1,19 @@
 "use client"
 
 import { useCallback, useEffect, useState } from "react"
-import { AlertTriangle, ArrowDownCircle, ArrowUpCircle, Clock, Coins, Gauge, Landmark, PlusCircle, RefreshCw, Users, Wallet } from "lucide-react"
+import { AlertTriangle, ArrowDownCircle, ArrowUpCircle, Clock, Coins, Gauge, Landmark, Package, PlusCircle, RefreshCw, Users, Wallet } from "lucide-react"
 import { api } from "@/lib/client"
 import { formatBytes, formatDate, formatNumber, percent } from "@/lib/format"
 import { useLocale, useT } from "@/lib/i18n"
 import { Button, Card, PageHeader, Stat, Tabs, cx } from "@/components/ui"
 import { LedgerTab } from "./LedgerTab"
 import { OwnerPanel } from "./OwnerPanel"
+import { PlansTab } from "./PlansTab"
 import { TopupModal } from "./TopupModal"
 import { TopupsTab } from "./TopupsTab"
 import { tr, type Overview, type Topup, type Tx } from "./types"
 
-type Tab = "ledger" | "topups" | "owner"
+type Tab = "ledger" | "topups" | "owner" | "plans"
 
 export function WalletClient({ initial }: { initial: Overview }) {
 	const t = useT()
@@ -150,12 +151,14 @@ export function WalletClient({ initial }: { initial: Overview }) {
 				onChange={setTab}
 				tabs={[
 					...(data.isOwner ? [{ id: "owner" as const, label: t("wal_tab_owner"), icon: <Users className="h-4 w-4" /> }] : []),
+					{ id: "plans", label: L("بسته‌های نمایندگی", "Packages"), icon: <Package className="h-4 w-4" /> },
 					{ id: "ledger", label: t("wal_tab_ledger"), icon: <Coins className="h-4 w-4" /> },
 					{ id: "topups", label: t("wal_tab_topups"), icon: <Landmark className="h-4 w-4" />, count: data.pendingTopups > 0 ? data.pendingTopups : undefined },
 				]}
 			/>
 
 			{tab === "owner" && data.isOwner && <OwnerPanel />}
+			{tab === "plans" && <PlansTab isOwner={data.isOwner} balance={data.balance} onDone={reload} />}
 			{tab === "ledger" && <LedgerTab txs={txs} onRefresh={reload} />}
 			{tab === "topups" && <TopupsTab topups={topups} canTopup={!data.isOwner} onTopup={() => setOpen(true)} onRefresh={reload} />}
 
