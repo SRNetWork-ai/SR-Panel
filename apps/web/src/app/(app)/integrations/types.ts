@@ -52,7 +52,29 @@ export type NotificationRow = {
 	error: string | null
 }
 
-export type Tab = "telegram" | "apikeys" | "webhooks" | "notifications"
+/* ---------- reseller sales bots ---------- */
+export type SalesBot = {
+	adminId: string
+	hasToken: boolean
+	tokenMasked: string
+	username: string
+	enabled: boolean
+	blocked: boolean
+	paid: number
+	activatedAt: string
+	link: string
+}
+
+export type SalesBotRow = SalesBot & { adminName: string; adminActive: boolean }
+
+export type SalesBotPayload = {
+	isOwner: boolean
+	config: { enabled: boolean; setupPrice: number; welcome: string }
+	mine: SalesBot
+	bots: SalesBotRow[]
+}
+
+export type Tab = "telegram" | "salesbot" | "apikeys" | "webhooks" | "notifications"
 
 export function errMsg(err: unknown, fallback: string) {
 	return err instanceof Error ? err.message : fallback

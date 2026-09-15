@@ -1,12 +1,13 @@
 "use client"
 
 import { useState } from "react"
-import { Bell, Bot, KeyRound, Webhook as WebhookIcon } from "lucide-react"
+import { Bell, Bot, KeyRound, Send, Webhook as WebhookIcon } from "lucide-react"
 import type { AdminDto } from "@/lib/dto"
 import { useLocale, useT } from "@/lib/i18n"
 import { Badge, PageHeader, cx } from "@/components/ui"
 import { ApiKeysTab } from "./ApiKeysTab"
 import { NotificationsTab } from "./NotificationsTab"
+import { ResellerBotTab } from "./ResellerBotTab"
 import { TelegramTab } from "./TelegramTab"
 import { WebhooksTab } from "./WebhooksTab"
 import { tr, type Tab, type TelegramForm } from "./types"
@@ -21,6 +22,7 @@ export function IntegrationsClient({ me, telegram }: { me: AdminDto; telegram: T
 
 	const allTabs: Array<{ id: Tab; label: string; hint: string; icon: typeof Bot; owner?: boolean }> = [
 		{ id: "telegram", label: t("int_tab_telegram"), hint: L("ربات، اعلان‌ها و دستورهای تلگرام", "Telegram bot, alerts and commands"), icon: Bot, owner: true },
+		{ id: "salesbot", label: L("ربات فروش", "Sales bot"), hint: L("ربات تلگرام فروشگاه برای هر نماینده", "A Telegram sales bot per reseller"), icon: Send },
 		{ id: "apikeys", label: t("int_tab_apikeys"), hint: L("دسترسی برنامه‌نویسی به API نسخهٔ ۱", "Programmatic access to API v1"), icon: KeyRound },
 		{ id: "webhooks", label: t("int_tab_webhooks"), hint: L("ارسال رویدادهای پنل به سرویس شما", "Push panel events to your service"), icon: WebhookIcon },
 		{ id: "notifications", label: t("int_tab_notifications"), hint: L("تاریخچهٔ ارسال اعلان‌ها", "Notification delivery history"), icon: Bell, owner: true },
@@ -54,6 +56,7 @@ export function IntegrationsClient({ me, telegram }: { me: AdminDto; telegram: T
 			</div>
 
 			{tab === "telegram" && telegram && <TelegramTab initial={telegram} />}
+			{tab === "salesbot" && <ResellerBotTab />}
 			{tab === "apikeys" && <ApiKeysTab />}
 			{tab === "webhooks" && <WebhooksTab />}
 			{tab === "notifications" && <NotificationsTab />}

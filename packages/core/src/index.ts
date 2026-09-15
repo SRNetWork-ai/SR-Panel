@@ -32,6 +32,8 @@ export * from "./services/backupOps"
 export * from "./services/logs"
 export * from "./services/apikeys"
 export * from "./services/telegramBot"
+// per-reseller Telegram sales bots (owner switch + activation price, Setting-backed)
+export * from "./services/resellerBots"
 // stage 2B
 export * from "./services/wallet"
 // pro-rated refunds when a client is deleted (Setting-backed, no schema change)

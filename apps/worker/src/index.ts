@@ -1,5 +1,5 @@
 /**
- * SRPanel worker: panel sync, status enforcement, incidents, reminders, backups, webhooks, Telegram bot.
+ * SRPanel worker: panel sync, status enforcement, incidents, reminders, backups, webhooks, Telegram bots.
  */
 process.env.TZ ??= process.env.SRP_TZ || "Asia/Tehran"
 
@@ -16,6 +16,7 @@ import {
 	ensureOwner,
 	evaluateIncidents,
 	expirePayments,
+	pollResellerBots,
 	pollTelegram,
 	pruneHistory,
 	pruneLogs,
@@ -181,6 +182,8 @@ async function main() {
 	]
 	const botAbort = new AbortController()
 	const bot = pollTelegram(botAbort.signal, log).catch((err) => warn("telegram bot stopped", err))
+	// every reseller sales bot shares this single short-polling loop
+	const shopBots = pollResellerBots(botAbort.signal, log).catch((err) => warn("reseller bots stopped", err))
 
 	await syncAll()
 	await enforce()
@@ -191,7 +194,7 @@ async function main() {
 		log("stopping…")
 		jobs.forEach((j) => j.stop())
 		botAbort.abort()
-		await Promise.race([bot, new Promise((r) => setTimeout(r, 3000))])
+		await Promise.race([Promise.all([bot, shopBots]), new Promise((r) => setTimeout(r, 3000))])
 		await prisma.$disconnect()
 		process.exit(0)
 	}
