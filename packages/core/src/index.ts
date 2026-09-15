@@ -38,6 +38,8 @@ export * from "./services/wallet"
 export * from "./services/refunds"
 // «client limited» / «client unlimited» permissions per reseller and per service
 export * from "./services/clientTypes"
+// reseller packages: a reseller buys traffic / days / client slots for itself
+export * from "./services/resellerPlans"
 export * from "./services/plans"
 export * from "./services/zarinpal"
 export * from "./services/tron"
