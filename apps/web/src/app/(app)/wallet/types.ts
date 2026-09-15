@@ -86,6 +86,30 @@ export type Reseller = {
 	spent30d: number
 }
 
+/** reseller packages — traffic / days / client slots a reseller buys for itself */
+export type ResellerPlanDto = {
+	id: string
+	name: string
+	description: string
+	gb: number
+	days: number
+	clients: number
+	price: number
+	isActive: boolean
+	sortOrder: number
+	adminIds: string[]
+}
+
+export type PlansPayload = { isOwner: boolean; enabled: boolean; plans: ResellerPlanDto[] }
+
+export type PlanPurchase = {
+	charged: number
+	balance: number
+	trafficQuota: number | null
+	clientLimit: number | null
+	expiresAt: string | null
+}
+
 type Tone = "success" | "warning" | "danger" | "muted" | "violet" | "cyan"
 export const KIND_TONE: Record<TxKind, Tone> = { TOPUP: "success", PURCHASE: "violet", REFUND: "cyan", ADJUST: "warning" }
 export const PAY_TONE: Record<string, Tone> = { PENDING: "muted", REVIEW: "warning", CONFIRMED: "success", REJECTED: "danger", EXPIRED: "muted" }
