@@ -54,6 +54,8 @@ export const storeCatalogSchema = z.object({
 	items: z.record(storePlanOptionsSchema).default({}),
 })
 export type StoreCatalog = z.infer<typeof storeCatalogSchema>
+/** Raw (pre-default) shape accepted by saveStoreCatalog, e.g. an API body. */
+export type StoreCatalogPatch = Partial<z.input<typeof storeCatalogSchema>>
 
 export const DEFAULT_PLAN_OPTIONS: StorePlanOptions = storePlanOptionsSchema.parse({})
 
@@ -74,7 +76,7 @@ export function planOptionsOf(catalog: StoreCatalog, planId: string): StorePlanO
  * options pointing at a removed category lose it, and rows that carry nothing
  * but defaults are discarded so the stored object stays small.
  */
-export async function saveStoreCatalog(adminId: string, patch: Partial<StoreCatalog>): Promise<StoreCatalog> {
+export async function saveStoreCatalog(adminId: string, patch: StoreCatalogPatch): Promise<StoreCatalog> {
 	const current = await storeCatalog(adminId)
 	const next = storeCatalogSchema.parse({ ...current, ...patch })
 	const seen = new Set<string>()
