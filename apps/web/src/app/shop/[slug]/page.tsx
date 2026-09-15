@@ -1,11 +1,11 @@
 import type { Metadata } from "next"
 import { notFound } from "next/navigation"
-import { getStoreBySlug, jsonSafe, publicStorePayload } from "@srpanel/core"
+import { getStoreBySlug, jsonSafe, publicStoreCatalog, publicStorePayload } from "@srpanel/core"
 import { ShopClient } from "./ShopClient"
 
 export const dynamic = "force-dynamic"
 
-type Params = { params: Promise<{ slug: string }>; searchParams: Promise<{ renew?: string; tg?: string }> }
+type Params = { params: Promise<{ slug: string }>; searchParams: Promise<{ renew?: string; tg?: string; plan?: string }> }
 
 export async function generateMetadata({ params }: Params): Promise<Metadata> {
 	const { slug } = await params
@@ -17,9 +17,11 @@ export async function generateMetadata({ params }: Params): Promise<Metadata> {
 
 export default async function ShopPage({ params, searchParams }: Params) {
 	const { slug } = await params
-	const { renew, tg } = await searchParams
+	const { renew, tg, plan } = await searchParams
 	const ctx = await getStoreBySlug(slug)
 	if (!ctx) notFound()
 	const store = await publicStorePayload(ctx)
-	return <ShopClient store={jsonSafe(store) as never} renewToken={renew} tgParam={tg} />
+	// categories & extended plan options live in the Setting table (see core/storeCatalog)
+	const catalog = await publicStoreCatalog(ctx.admin.id, store.plans)
+	return <ShopClient store={jsonSafe(store) as never} catalog={jsonSafe(catalog) as never} renewToken={renew} tgParam={tg} planParam={plan} />
 }

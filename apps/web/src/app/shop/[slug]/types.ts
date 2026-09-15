@@ -100,6 +100,53 @@ export type PublicStore = {
 	plans: PublicPlan[]
 }
 
+/* ---------- catalogue: categories + extended plan options ---------- */
+
+/** Mirror of core `PublicCategory`; icons are shared with the page builder. */
+export type ShopCategory = {
+	id: string
+	name: string
+	description: string
+	icon: StorePageIcon
+	count: number
+}
+
+/** Mirror of core `PublicPlanOptions`. */
+export type ShopPlanOptions = {
+	categoryId: string
+	ribbon: string
+	highlight: boolean
+	features: string[]
+	note: string
+	/** null = unlimited stock */
+	stockLeft: number | null
+	soldOut: boolean
+	perCustomer: number
+}
+
+export type ShopCatalog = {
+	enabled: boolean
+	showCounts: boolean
+	categories: ShopCategory[]
+	items: Record<string, ShopPlanOptions>
+	/** plans reachable only through `?plan=<id>` */
+	hidden: string[]
+}
+
+export const EMPTY_CATALOG: ShopCatalog = { enabled: false, showCounts: true, categories: [], items: {}, hidden: [] }
+
+export const EMPTY_PLAN_OPTIONS: ShopPlanOptions = { categoryId: "", ribbon: "", highlight: false, features: [], note: "", stockLeft: null, soldOut: false, perCustomer: 0 }
+
+/** Options of a single plan with neutral fallbacks, so cards render unconditionally. */
+export const planOptions = (catalog: ShopCatalog | undefined, planId: string): ShopPlanOptions => catalog?.items[planId] ?? EMPTY_PLAN_OPTIONS
+
+/** Public plan list: hidden plans stay out unless one of them is selected. */
+export function visiblePlans(plans: PublicPlan[], catalog: ShopCatalog | undefined, keepId?: string | null): PublicPlan[] {
+	if (!catalog || !catalog.enabled || catalog.hidden.length === 0) return plans
+	const hidden = new Set(catalog.hidden)
+	return plans.filter((p) => !hidden.has(p.id) || p.id === keepId)
+}
+
 /* ---------- storefront account (session of the buyer) ---------- */
 
 export type CustomerProfile = {
