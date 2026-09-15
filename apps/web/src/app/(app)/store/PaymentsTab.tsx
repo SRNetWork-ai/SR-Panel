@@ -147,7 +147,7 @@ export function PaymentsTab({ initial }: { initial: StoreSettings }) {
 			</div>
 
 			<div className="glass flex flex-wrap items-center gap-2 px-4 py-2.5">
-				{liveMethods.length ? liveMethods.map((m) => <Badge key={m} tone="cyan">{t(("pay_m_" + m) as never)}</Badge>) : <Badge tone="warning">{t("store_no_methods")}</Badge>}
+				{liveMethods.length ? liveMethods.map((m) => <Badge key={m} tone="cyan">{t(("pay_m_" + m) as never)}</Badge>) : <Badge tone="warning">{L("هیچ روش پرداختی فعال نیست", "No payment method is enabled")}</Badge>}
 				{effRate > 0 ? (
 					<span className="text-[11px] text-muted">
 						{L("نرخ تتر", "USDT rate")}: <b className="num">{formatNumber(effRate)}</b> {t("currency_irt")}
