@@ -6,7 +6,7 @@ import { api } from "@/lib/client"
 import { useLocale, useT } from "@/lib/i18n"
 import { Badge, Button, Card, Empty, Field, Input, Select, Spinner, Switch, useConfirm, useToast } from "@/components/ui"
 import { CopyBtn } from "@/components/bits"
-import { errMsg, fmtWhen, tr } from "./types"
+import { fmtWhen, tr } from "./types"
 
 type Plan = "FREE" | "PLUS" | "PRO"
 type Status = "unused" | "active" | "expired" | "revoked" | "free"
@@ -68,6 +68,8 @@ export function LicenseTab() {
 	const [form, setForm] = useState({ count: "1", plan: "PRO", days: "0", note: "" })
 	const [made, setMade] = useState<string[]>([])
 
+	const fail = (err: unknown) => toast.err(err instanceof Error ? err.message : String(err))
+
 	const statusText = (s: Status) =>
 		s === "active"
 			? L("فعال", "Active")
@@ -83,7 +85,7 @@ export function LicenseTab() {
 		try {
 			setData(await api<Data>("/api/licenses"))
 		} catch (err) {
-			toast.err(errMsg(err))
+			fail(err)
 		}
 	}
 
@@ -99,7 +101,7 @@ export function LicenseTab() {
 			toast.ok(done ?? t("set_saved"))
 			await load()
 		} catch (err) {
-			toast.err(errMsg(err))
+			fail(err)
 		} finally {
 			setBusy("")
 		}
@@ -122,7 +124,7 @@ export function LicenseTab() {
 			await api("/api/licenses", { method: "PUT", json: { enforced: !data.panel.enforced } })
 			await load()
 		} catch (err) {
-			toast.err(errMsg(err))
+			fail(err)
 		} finally {
 			setBusy("")
 		}
