@@ -36,6 +36,8 @@ export * from "./services/telegramBot"
 export * from "./services/resellerBots"
 // owner-issued premium licenses + feature entitlements (Setting-backed)
 export * from "./services/licensing"
+// vendor master panel vs customer install: who mints codes, how a code is verified
+export * from "./services/licenseVendor"
 // outbound SMTP mail + emailed login codes (Setting-backed, no dependency)
 export * from "./services/mailer"
 // stage 2B
