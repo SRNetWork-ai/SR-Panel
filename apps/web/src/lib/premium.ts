@@ -30,6 +30,8 @@ const PREMIUM_PATHS: ReadonlyArray<readonly [string, LicenseFeature]> = [
 	["/api/settings/backup", "backupCenter"],
 	// per-admin branding
 	["/api/settings/brand", "branding"],
+	// per-admin custom shop domain (the public /api/health/domain check stays free)
+	["/api/settings/domain", "domain"],
 	// reseller sales bots
 	["/api/settings/reseller-bots", "salesBot"],
 	// client template system

@@ -1,7 +1,7 @@
 "use client"
 
 import { useState } from "react"
-import { Bell, Clock, KeyRound, Mail, Palette, Settings2, ShieldCheck, Sparkles, Stethoscope, UserCircle2 } from "lucide-react"
+import { Bell, Clock, Globe2, KeyRound, Mail, Palette, Settings2, ShieldCheck, Sparkles, Stethoscope, UserCircle2 } from "lucide-react"
 import type { AdminDto } from "@/lib/dto"
 import { useLocale, useT } from "@/lib/i18n"
 import { Badge, PageHeader } from "@/components/ui"
@@ -10,6 +10,7 @@ import { AccountTab } from "./AccountTab"
 import { AlertsTab } from "./AlertsTab"
 import { AppearanceTab } from "./AppearanceTab"
 import { BrandTab } from "./BrandTab"
+import { DomainTab } from "./DomainTab"
 import { LicenseTab } from "./LicenseTab"
 import { MailTab } from "./MailTab"
 import { SecurityTab } from "./SecurityTab"
@@ -20,8 +21,8 @@ import { tr, type Brand, type SystemInfo, type Tab } from "./types"
 
 export type { SystemInfo } from "./types"
 
-/** `license` and `mail` live only in this screen, so they stay out of the deep-link Tab union. */
-type LocalTab = Tab | "license" | "mail"
+/** `license`, `mail` and `domain` live only in this screen, so they stay out of the deep-link Tab union. */
+type LocalTab = Tab | "license" | "mail" | "domain"
 
 export function SettingsClient({ me, brand: initialBrand, info, initialTab }: { me: AdminDto; brand: Brand; info: SystemInfo; initialTab?: Tab }) {
 	const t = useT()
@@ -41,6 +42,7 @@ export function SettingsClient({ me, brand: initialBrand, info, initialTab }: { 
 		{ id: "security", label: L("\u0627\u0645\u0646\u06cc\u062a", "Security"), icon: ShieldCheck, badge: totpOn ? "2FA" : undefined },
 		{ id: "session", label: L("\u0646\u0634\u0633\u062a \u0648 \u0642\u0641\u0644 \u062e\u0648\u062f\u06a9\u0627\u0631", "Session & lock"), icon: Clock },
 		{ id: "brand", label: t("set_brand"), icon: Palette },
+		{ id: "domain", label: L("\u062f\u0627\u0645\u0646\u0647\u0654 \u0627\u062e\u062a\u0635\u0627\u0635\u06cc", "Custom domain"), icon: Globe2 },
 		{ id: "appearance", label: t("set_appearance"), icon: Sparkles },
 		{ id: "license", label: L("\u0644\u0627\u06cc\u0633\u0646\u0633 \u0648 \u067e\u0631\u0645\u06cc\u0648\u0645", "License & premium"), icon: KeyRound },
 		...(isOwner ? [mailTab] : []),
@@ -71,6 +73,7 @@ export function SettingsClient({ me, brand: initialBrand, info, initialTab }: { 
 			{tab === "security" && <SecurityTab me={me} totpOn={totpOn} onTotp={setTotpOn} />}
 			{tab === "session" && <SessionTab />}
 			{tab === "brand" && <BrandTab brand={brand} onChange={setBrand} />}
+			{tab === "domain" && <DomainTab />}
 			{tab === "appearance" && <AppearanceTab brand={brand} />}
 			{tab === "license" && <LicenseTab />}
 			{tab === "mail" && isOwner && <MailTab />}

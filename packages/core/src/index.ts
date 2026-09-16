@@ -44,7 +44,7 @@ export * from "./services/mailer"
 export * from "./services/wallet"
 // pro-rated refunds when a client is deleted (Setting-backed, no schema change)
 export * from "./services/refunds"
-// «client limited» / «client unlimited» permissions per reseller and per service
+// "client limited" / "client unlimited" permissions per reseller and per service
 export * from "./services/clientTypes"
 // reseller packages: a reseller buys traffic / days / client slots for itself
 export * from "./services/resellerPlans"
@@ -52,6 +52,8 @@ export * from "./services/plans"
 export * from "./services/zarinpal"
 export * from "./services/tron"
 export * from "./services/storeSettings"
+// per-admin custom shop domain (Brand.customDomain + loop-back verification)
+export * from "./services/storeDomains"
 export * from "./services/payments"
 export * from "./services/store"
 // editable storefront content (hero / features / steps / FAQ)
@@ -63,9 +65,9 @@ export * from "./services/customers"
 export * from "./services/storeCustomerPay"
 // in-panel updates
 export * from "./services/updates"
-// stage 3 — advanced server management (detail view + bulk sync)
+// stage 3 - advanced server management (detail view + bulk sync)
 export * from "./services/serverAdmin"
-// stage 4 — advanced service health & reseller management
+// stage 4 - advanced service health & reseller management
 export * from "./services/serviceAdmin"
 export * from "./services/adminAdmin"
 // login brute-force guard + security policy (Setting-backed, no schema change)
@@ -123,7 +125,7 @@ export {
 	type IngestResult,
 	type BankSyncResult,
 } from "./services/cardAuto"
-// multi-coin crypto checkout (USDT / TON / TRX / BEP20 …)
+// multi-coin crypto checkout (USDT / TON / TRX / BEP20 ...)
 export {
 	CRYPTO_NETWORKS,
 	CRYPTO_NETWORK_LABELS,
@@ -151,7 +153,7 @@ export {
 	type CryptoQuote,
 	type CryptoOption,
 } from "./services/cryptoAssets"
-// «start after first use» timers (Setting-backed, no schema change)
+// "start after first use" timers (Setting-backed, no schema change)
 export {
 	setPendingStart,
 	getPendingStart,
