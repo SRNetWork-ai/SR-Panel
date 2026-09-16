@@ -36,6 +36,8 @@ export * from "./services/telegramBot"
 export * from "./services/resellerBots"
 // owner-issued premium licenses + feature entitlements (Setting-backed)
 export * from "./services/licensing"
+// outbound SMTP mail + emailed login codes (Setting-backed, no dependency)
+export * from "./services/mailer"
 // stage 2B
 export * from "./services/wallet"
 // pro-rated refunds when a client is deleted (Setting-backed, no schema change)
