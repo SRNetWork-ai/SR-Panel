@@ -1,303 +1,325 @@
 "use client"
 
-import { useCallback, useEffect, useState } from "react"
-import { Check, KeyRound, Lock, Plus, RefreshCw, ShieldCheck, Trash2, Unlink, Unlock, X } from "lucide-react"
+import { useEffect, useState } from "react"
+import { Check, Lock, RefreshCw, Trash2 } from "lucide-react"
 import { api } from "@/lib/client"
 import { useLocale, useT } from "@/lib/i18n"
 import { Badge, Button, Card, Empty, Field, Input, Select, Spinner, Switch, useConfirm, useToast } from "@/components/ui"
 import { CopyBtn } from "@/components/bits"
 import { errMsg, fmtWhen, tr } from "./types"
 
-type Feature = { id: string; label: string }
-type Ent = { enforced: boolean; plan: string; features: string[]; code: string; expiresAt: string; status: string }
-type Row = {
+type Plan = "FREE" | "PLUS" | "PRO"
+type Status = "unused" | "active" | "expired" | "revoked" | "free"
+
+type PanelLicense = {
 	code: string
-	plan: string
+	plan: Plan
+	activatedAt: string
+	expiresAt: string
+	lastCheck: string
+	source: string
+	note: string
+	instanceId: string
+	status: Status
 	effective: string[]
+	enforced: boolean
+	forced: boolean
+	api: boolean
+}
+
+type LicenseRow = {
+	code: string
+	plan: Plan
 	days: number
 	note: string
 	createdAt: string
-	adminId: string
-	activatedAt: string
+	instanceId: string
+	instanceUrl: string
 	expiresAt: string
 	revoked: boolean
-	status: string
-	adminName: string
+	status: Status
 }
-type Payload = { isOwner: boolean; enforced: boolean; mine: Ent; features: Feature[]; licenses: Row[] }
 
-const PLANS = ["FREE", "PLUS", "PRO"]
+type Data = {
+	isOwner: boolean
+	panel: PanelLicense
+	features: Array<{ id: string; label: string }>
+	licenses: LicenseRow[]
+}
 
-/** Premium licensing: the owner mints codes, every admin activates its own. */
+const TONE: Record<Status, "success" | "warning" | "danger" | "muted"> = {
+	active: "success",
+	expired: "warning",
+	revoked: "danger",
+	unused: "muted",
+	free: "muted",
+}
+
+/** Panel-wide premium: one 12-character code unlocks the whole install. */
 export function LicenseTab() {
 	const t = useT()
 	const locale = useLocale()
+	const L = (fa: string, en: string) => tr(locale, fa, en)
 	const toast = useToast()
 	const confirm = useConfirm()
-	const L = (fa: string, en: string) => tr(locale, fa, en)
-
-	const [data, setData] = useState<Payload | null>(null)
-	const [failed, setFailed] = useState(false)
-	const [busy, setBusy] = useState(false)
+	const [data, setData] = useState<Data | null>(null)
 	const [code, setCode] = useState("")
+	const [busy, setBusy] = useState("")
+	const [form, setForm] = useState({ count: "1", plan: "PRO", days: "0", note: "" })
 	const [made, setMade] = useState<string[]>([])
-	const [form, setForm] = useState({ count: 1, plan: "PRO", days: 365, note: "" })
-	const [picks, setPicks] = useState<string[]>([])
 
-	const load = useCallback(async () => {
-		setData(await api<Payload>("/api/licenses"))
-	}, [])
-
-	useEffect(() => {
-		load().catch(() => setFailed(true))
-	}, [load])
-
-	const statusLabel = (s: string) =>
+	const statusText = (s: Status) =>
 		s === "active"
 			? L("فعال", "Active")
 			: s === "expired"
 				? L("منقضی", "Expired")
 				: s === "revoked"
-					? L("لغو‌شده", "Revoked")
+					? L("لغو شده", "Revoked")
 					: s === "unused"
-						? L("استفاده‌نشده", "Unused")
-						: L("رایگان", "Free")
-	const statusTone = (s: string): "success" | "warning" | "danger" | "cyan" | "muted" =>
-		s === "active" ? "success" : s === "expired" ? "warning" : s === "revoked" ? "danger" : s === "unused" ? "cyan" : "muted"
+						? L("استفاده نشده", "Unused")
+						: L("بدون لایسنس", "No license")
 
-	async function post(json: Record<string, unknown>, okMsg: string) {
-		setBusy(true)
+	async function load() {
 		try {
-			await api("/api/licenses", { method: "POST", json })
-			await load()
-			toast.ok(okMsg)
+			setData(await api<Data>("/api/licenses"))
 		} catch (err) {
-			toast.err(errMsg(err, t("error_generic")))
-		} finally {
-			setBusy(false)
+			toast.err(errMsg(err))
 		}
 	}
 
-	async function refresh() {
-		setBusy(true)
-		try {
-			await load()
-		} catch (err) {
-			toast.err(errMsg(err, t("error_generic")))
-		} finally {
-			setBusy(false)
-		}
-	}
+	useEffect(() => {
+		void load()
+	}, [])
 
-	async function setEnforced(v: boolean) {
-		setBusy(true)
+	async function send(body: Record<string, unknown>, tag: string, done?: string) {
+		setBusy(tag)
 		try {
-			await api("/api/licenses", { method: "PUT", json: { enforced: v } })
+			const res = await api<{ created?: LicenseRow[] }>("/api/licenses", { method: "POST", json: body })
+			if (res.created) setMade(res.created.map((l) => l.code))
+			toast.ok(done ?? t("set_saved"))
 			await load()
-			toast.ok(t("set_saved"))
 		} catch (err) {
-			toast.err(errMsg(err, t("error_generic")))
+			toast.err(errMsg(err))
 		} finally {
-			setBusy(false)
+			setBusy("")
 		}
 	}
 
 	async function activate() {
-		const clean = code.trim()
-		if (!clean) return
-		await post({ activate: clean }, L("لایسنس فعال شد", "License activated"))
+		const clean = code.toUpperCase().replace(/[^A-Z0-9]/g, "")
+		if (clean.length !== 12) {
+			toast.err(L("کد باید ۱۲ کاراکتر باشد", "The code must be 12 characters"))
+			return
+		}
+		await send({ activate: clean }, "activate", L("پرمیوم فعال شد", "Premium activated"))
 		setCode("")
 	}
 
-	async function generate() {
-		setBusy(true)
+	async function toggleEnforce() {
+		if (!data) return
+		setBusy("enforce")
 		try {
-			const r = await api<{ created: Row[] }>("/api/licenses", {
-				method: "POST",
-				json: { create: { count: form.count, plan: form.plan, days: form.days, note: form.note, features: picks } },
-			})
-			setMade(r.created.map((x) => x.code))
+			await api("/api/licenses", { method: "PUT", json: { enforced: !data.panel.enforced } })
 			await load()
-			toast.ok(L("کد لایسنس ساخته شد", "Codes created"))
 		} catch (err) {
-			toast.err(errMsg(err, t("error_generic")))
+			toast.err(errMsg(err))
 		} finally {
-			setBusy(false)
+			setBusy("")
 		}
 	}
 
-	async function remove(row: Row) {
-		if (!(await confirm(t("confirm_delete")))) return
-		await post({ code: row.code, remove: true }, L("کد حذف شد", "Code removed"))
-	}
-
-	if (failed) return <Empty text={L("اطلاعات لایسنس دریافت نشد.", "Could not load licensing data.")} />
-	if (!data) return <div className="flex justify-center p-8"><Spinner /></div>
-
-	const mine = data.mine
-	const owned = new Set(mine.features)
+	if (!data) return <Spinner />
+	const p = data.panel
+	const locked = p.enforced && p.status !== "active"
+	const sourceText = p.source === "remote" ? L("سرور لایسنس", "License server") : p.source === "env" ? L("آفلاین", "Offline") : L("محلی", "Local")
 
 	return (
-		<div className="space-y-4">
+		<div className="space-y-6">
 			<Card
-				title={L("لایسنس من", "My license")}
-				subtitle={L("امکانات پرمیومی که روی این حساب باز است", "Premium features unlocked on this account")}
-				actions={
-					<div className="flex flex-wrap items-center gap-2">
-						<Badge tone={mine.plan === "PRO" ? "violet" : mine.plan === "PLUS" ? "cyan" : "muted"}>{mine.plan}</Badge>
-						<Badge tone={statusTone(mine.status)}>{statusLabel(mine.status)}</Badge>
-						<Button size="sm" onClick={refresh} loading={busy} title={t("refresh")}>
-							<RefreshCw className="h-4 w-4" />
-						</Button>
-					</div>
-				}
+				title={L("لایسنس پنل", "Panel license")}
+				subtitle={L("یک کد ۱۲ کاراکتری پرمیوم را برای کل این نصب باز می‌کند", "One 12-character code unlocks premium for this whole install")}
+				actions={<Badge tone={locked ? "warning" : TONE[p.status]}>{locked ? L("قفل", "Locked") : statusText(p.status)}</Badge>}
 			>
 				<div className="space-y-4">
-					{!data.enforced && (
-						<div className="tile p-3 text-xs leading-6 text-muted">
-							{L("قفل لایسنس خاموش است؛ همهٔ امکانات برای همهٔ ادمین‌ها باز است.", "Licensing is off; every feature is unlocked for all admins.")}
+					<div className="grid gap-3 md:grid-cols-3">
+						<div className="tile">
+							<div className="text-muted">{L("پلن", "Plan")}</div>
+							<div className="num">{p.status === "active" ? p.plan : "FREE"}</div>
 						</div>
-					)}
-					<div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-						{data.features.map((f) => {
-							const on = owned.has(f.id)
-							return (
-								<div key={f.id} className="tile flex items-center gap-2 p-3 text-sm">
-									{on ? <Check className="h-4 w-4 text-success" /> : <X className="h-4 w-4 text-muted" />}
-									<span className={on ? "text-fg" : "text-muted"}>{f.label}</span>
-								</div>
-							)
-						})}
+						<div className="tile">
+							<div className="text-muted">{L("انقضا", "Expiry")}</div>
+							<div>{p.expiresAt ? fmtWhen(p.expiresAt, locale) : L("بدون انقضا", "Never")}</div>
+						</div>
+						<div className="tile">
+							<div className="text-muted">{L("آخرین بازبینی", "Last check")}</div>
+							<div>{p.lastCheck ? fmtWhen(p.lastCheck, locale) : "-"}</div>
+						</div>
 					</div>
-					<div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted">
-						{mine.code && <span className="mono" dir="ltr">{mine.code}</span>}
-						<span>{L("انقضا", "Expires") + ": " + (mine.expiresAt ? fmtWhen(mine.expiresAt, locale) : L("بدون انقضا", "Never"))}</span>
+
+					<div className="tile space-y-2">
+						<div className="text-muted">{L("شناسهٔ نصب — این را به فروشنده بدهید", "Install id — hand this to the vendor")}</div>
+						<div className="flex items-center gap-2">
+							<span className="mono">{p.instanceId}</span>
+							<CopyBtn value={p.instanceId} />
+						</div>
+						{p.code ? (
+							<div className="flex items-center gap-2">
+								<span className="mono">{p.code}</span>
+								<Badge tone="muted">{sourceText}</Badge>
+							</div>
+						) : null}
+						{p.note ? <div className="text-danger">{p.note}</div> : null}
 					</div>
-					<div className="flex flex-wrap items-end gap-2">
-						<Field label={L("کد لایسنس", "License code")} hint={L("کد دریافتی از مالک پنل را وارد کنید.", "Paste the code you received from the panel owner.")}>
-							<Input dir="ltr" className="mono" placeholder="SRP-XXXX-XXXX-XXXX" value={code} onChange={(e) => setCode(e.target.value)} />
+
+					<div className="grid gap-3 md:grid-cols-2">
+						<Field label={L("کد لایسنس (۱۲ کاراکتر)", "License code (12 chars)")} hint={L("کد را از فروشنده بگیرید", "Get the code from the vendor")}>
+							<Input value={code} onChange={(e) => setCode(e.target.value)} placeholder="ABCD2345EFGH" />
 						</Field>
-						<Button variant="primary" loading={busy} disabled={!code.trim()} onClick={activate}>
-							<ShieldCheck className="h-4 w-4" /> {L("فعال‌سازی", "Activate")}
-						</Button>
+						<div className="flex flex-wrap items-end gap-2">
+							<Button onClick={activate} loading={busy === "activate"}>
+								{L("فعال‌سازی پرمیوم", "Activate premium")}
+							</Button>
+							{p.code ? (
+								<>
+									<Button onClick={() => void send({ refresh: true }, "refresh")} loading={busy === "refresh"}>
+										<RefreshCw size={16} />
+										{L("بازبینی", "Re-check")}
+									</Button>
+									<Button
+										loading={busy === "clear"}
+										onClick={async () => {
+											if (!(await confirm(L("لایسنس این پنل حذف شود؟", "Remove this panel license?")))) return
+											await send({ clear: true }, "clear", L("لایسنس حذف شد", "License removed"))
+										}}
+									>
+										<Trash2 size={16} />
+										{L("حذف لایسنس", "Remove")}
+									</Button>
+								</>
+							) : null}
+						</div>
+					</div>
+
+					<div>
+						<div className="text-muted mb-2">{L("قابلیت‌های پرمیوم", "Premium features")}</div>
+						<div className="grid gap-2 md:grid-cols-3">
+							{data.features.map((f) => {
+								const on = !p.enforced || p.effective.includes(f.id)
+								return (
+									<div key={f.id} className="chip flex items-center gap-2">
+										{on ? <Check size={14} className="text-success" /> : <Lock size={14} className="text-muted" />}
+										<span className={on ? "text-fg" : "text-muted"}>{f.label}</span>
+									</div>
+								)
+							})}
+						</div>
 					</div>
 				</div>
 			</Card>
 
-			{data.isOwner && (
-				<Card title={L("ساخت کد لایسنس", "Mint license codes")} subtitle={L("کدها یک‌بارمصرف هستند و به حساب فعال‌کننده می‌چسبند", "Codes are single-use and bind to the activating account")}>
+			{data.isOwner ? (
+				<Card title={L("اجبار لایسنس", "Enforcement")} subtitle={L("تا وقتی خاموش باشد چیزی قفل نمی‌شود", "While off, nothing is locked")}>
+					{p.forced ? (
+						<Badge tone="violet">{L("با تنظیمات سرور اجباری شده است", "Forced by the server config")}</Badge>
+					) : (
+						<Switch checked={p.enforced} onChange={() => void toggleEnforce()} label={L("قابلیت‌های پرمیوم بدون لایسنس قفل باشند", "Lock premium features without a license")} />
+					)}
+				</Card>
+			) : null}
+
+			{data.isOwner ? (
+				<Card title={L("ساخت کد لایسنس", "Mint license codes")} subtitle={L("کدها ۱۲ کاراکتری و تک‌مصرف هستند", "Codes are 12 characters and single-use")}>
 					<div className="space-y-4">
-						<div className="tile p-3">
-							<Switch checked={data.enforced} onChange={setEnforced} label={L("اجبار لایسنس برای ادمین‌ها", "Enforce licensing for admins")} />
-							<div className="mt-1 text-xs text-muted">{L("مالک همیشه دسترسی کامل دارد. اعمال تغییر تا ۳۰ ثانیه طول می‌کشد.", "The owner always has full access. Changes apply within 30s.")}</div>
-						</div>
-						<div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+						<div className="grid gap-3 md:grid-cols-4">
 							<Field label={L("تعداد", "Count")}>
-								<Input type="number" min={1} max={50} dir="ltr" className="num" value={form.count} onChange={(e) => setForm((f) => ({ ...f, count: Math.min(50, Math.max(1, Math.round(Number(e.target.value) || 1))) }))} />
+								<Input value={form.count} onChange={(e) => setForm({ ...form, count: e.target.value })} />
 							</Field>
-							<Field label={L("طرح", "Plan")} hint={L("PRO = همهٔ امکانات", "PRO = everything")}>
-								<Select value={form.plan} onChange={(e) => setForm((f) => ({ ...f, plan: e.target.value }))}>
-									{PLANS.map((p) => (
-										<option key={p} value={p}>{p}</option>
-									))}
+							<Field label={L("پلن", "Plan")}>
+								<Select value={form.plan} onChange={(e) => setForm({ ...form, plan: e.target.value })}>
+									<option value="PRO">PRO</option>
+									<option value="PLUS">PLUS</option>
+									<option value="FREE">FREE</option>
 								</Select>
 							</Field>
-							<Field label={L("مدت (روز)", "Validity (days)")} hint={L("صفر = بدون انقضا", "0 = perpetual")}>
-								<Input type="number" min={0} max={3650} dir="ltr" className="num" value={form.days} onChange={(e) => setForm((f) => ({ ...f, days: Math.min(3650, Math.max(0, Math.round(Number(e.target.value) || 0))) }))} />
+							<Field label={L("اعتبار به روز (۰ = دائمی)", "Days (0 = perpetual)")}>
+								<Input value={form.days} onChange={(e) => setForm({ ...form, days: e.target.value })} />
 							</Field>
 							<Field label={L("یادداشت", "Note")}>
-								<Input value={form.note} onChange={(e) => setForm((f) => ({ ...f, note: e.target.value.slice(0, 200) }))} />
+								<Input value={form.note} onChange={(e) => setForm({ ...form, note: e.target.value })} />
 							</Field>
 						</div>
-						<div>
-							<div className="mb-2 text-xs text-muted">{L("انتخاب دستی امکانات (خالی = همان طرح)", "Hand-pick features (empty = plan preset)")}</div>
-							<div className="flex flex-wrap gap-1">
-								{data.features.map((f) => (
-									<button
-										key={f.id}
-										type="button"
-										className={picks.includes(f.id) ? "chip chip-on" : "chip"}
-										onClick={() => setPicks((cur) => (cur.includes(f.id) ? cur.filter((x) => x !== f.id) : [...cur, f.id]))}
-									>
-										{f.label}
-									</button>
+						<Button
+							loading={busy === "create"}
+							onClick={() =>
+								void send(
+									{
+										create: {
+											count: Math.max(1, Math.min(50, Number(form.count) || 1)),
+											plan: form.plan,
+											days: Math.max(0, Math.min(3650, Number(form.days) || 0)),
+											note: form.note,
+										},
+									},
+									"create",
+								)
+							}
+						>
+							{L("ساخت", "Create")}
+						</Button>
+						{made.length ? (
+							<div className="tile space-y-1">
+								{made.map((c) => (
+									<div key={c} className="flex items-center gap-2">
+										<span className="mono">{c}</span>
+										<CopyBtn value={c} />
+									</div>
 								))}
 							</div>
-						</div>
-						<div className="flex flex-wrap items-center gap-2">
-							<Button variant="primary" loading={busy} onClick={generate}>
-								<Plus className="h-4 w-4" /> {L("ساخت کد", "Create")}
-							</Button>
-							{picks.length > 0 && (
-								<Button variant="ghost" onClick={() => setPicks([])}>{L("پاک کردن انتخاب", "Clear picks")}</Button>
-							)}
-						</div>
-						{made.length > 0 && (
-							<div className="glass-2 space-y-2 rounded-xl p-3">
-								<div className="flex flex-wrap items-center justify-between gap-2">
-									<span className="text-xs text-muted">{L("کدهای تازه‌ساخته", "Newly created codes")}</span>
-									<CopyBtn value={made.join("\n")} label={L("کپی همه", "Copy all")} />
-								</div>
-								<div className="flex flex-wrap gap-2">
-									{made.map((c) => (
-										<span key={c} className="chip mono" dir="ltr">{c}</span>
-									))}
-								</div>
-							</div>
-						)}
+						) : null}
 					</div>
 				</Card>
-			)}
+			) : null}
 
-			{data.isOwner && (
-				<Card title={L("کدهای صادرشده", "Issued codes")} subtitle={L("وضعیت، صاحب کد و مدیریت لغو/آزادسازی", "Status, owner and revoke / release")}>
-					{data.licenses.length === 0 ? (
-						<Empty text={L("هنوز کدی ساخته نشده است.", "No code has been minted yet.")} />
-					) : (
-						<div className="space-y-3">
-							{data.licenses.map((row) => (
-								<div key={row.code} className="tile flex flex-wrap items-center justify-between gap-3 p-3">
-									<div className="min-w-0 space-y-1">
-										<div className="flex flex-wrap items-center gap-2">
-											<KeyRound className="h-4 w-4 text-violet-soft" />
-											<span className="mono text-sm" dir="ltr">{row.code}</span>
-											<CopyBtn value={row.code} />
-											<Badge tone={row.plan === "PRO" ? "violet" : row.plan === "PLUS" ? "cyan" : "muted"}>{row.plan}</Badge>
-											<Badge tone={statusTone(row.status)}>{statusLabel(row.status)}</Badge>
-										</div>
-										<div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted">
-											{row.adminName && <span>{row.adminName}</span>}
-											<span>{row.days > 0 ? row.days + " " + L("روز", "days") : L("بدون انقضا", "Perpetual")}</span>
-											{row.expiresAt && <span>{L("انقضا", "Expires") + ": " + fmtWhen(row.expiresAt, locale)}</span>}
-											<span>{t("created_at") + ": " + fmtWhen(row.createdAt, locale)}</span>
-											{row.note && <span className="max-w-[220px] truncate" title={row.note}>{row.note}</span>}
-										</div>
-									</div>
-									<div className="flex flex-wrap items-center gap-1">
+			{data.isOwner ? (
+				<Card title={L("کدهای صادرشده", "Issued codes")} actions={<Badge tone="muted">{data.licenses.length}</Badge>}>
+					{data.licenses.length ? (
+						<div className="space-y-2">
+							{data.licenses.map((l) => (
+								<div key={l.code} className="tile flex flex-wrap items-center gap-2">
+									<span className="mono">{l.code}</span>
+									<CopyBtn value={l.code} />
+									<Badge tone={TONE[l.status]}>{statusText(l.status)}</Badge>
+									<Badge tone="cyan">{l.plan}</Badge>
+									<span className="text-muted">{l.days ? l.days + " " + L("روز", "days") : L("دائمی", "perpetual")}</span>
+									{l.instanceId ? <span className="mono text-muted">{l.instanceUrl || l.instanceId}</span> : null}
+									{l.note ? <span className="text-muted">{l.note}</span> : null}
+									<span className="ms-auto flex flex-wrap gap-2">
+										{l.instanceId ? (
+											<Button size="sm" onClick={() => void send({ code: l.code, release: true }, "row")}>
+												{L("آزادسازی", "Release")}
+											</Button>
+										) : null}
+										<Button size="sm" onClick={() => void send({ code: l.code, revoked: !l.revoked }, "row")}>
+											{l.revoked ? L("بازگردانی", "Restore") : L("لغو", "Revoke")}
+										</Button>
 										<Button
 											size="sm"
-											variant="ghost"
-											loading={busy}
-											title={row.revoked ? L("بازگرداندن", "Restore") : L("لغو کردن", "Revoke")}
-											onClick={() => post({ code: row.code, revoked: !row.revoked }, row.revoked ? L("لایسنس بازگردانده شد", "Restored") : L("لایسنس لغو شد", "Revoked"))}
+											onClick={async () => {
+												if (!(await confirm(t("confirm_delete")))) return
+												await send({ code: l.code, remove: true }, "row")
+											}}
 										>
-											{row.revoked ? <Unlock className="h-4 w-4" /> : <Lock className="h-4 w-4" />}
+											<Trash2 size={14} />
 										</Button>
-										{row.adminId && (
-											<Button size="sm" variant="ghost" loading={busy} title={L("آزادسازی کد", "Release code")} onClick={() => post({ code: row.code, release: true }, L("کد آزاد شد", "Code released"))}>
-												<Unlink className="h-4 w-4" />
-											</Button>
-										)}
-										<Button size="icon" variant="ghost" loading={busy} title={t("delete")} onClick={() => remove(row)}>
-											<Trash2 className="h-4 w-4 text-danger" />
-										</Button>
-									</div>
+									</span>
 								</div>
 							))}
 						</div>
+					) : (
+						<Empty text={t("nothing_here")} />
 					)}
 				</Card>
-			)}
+			) : null}
 		</div>
 	)
 }

@@ -2,12 +2,13 @@ import {
 	AppError,
 	LICENSE_FEATURES,
 	LICENSE_FEATURE_LABELS,
-	activateLicense,
+	activatePanelLicense,
+	clearPanelLicense,
 	createLicenses,
 	deleteLicense,
-	entitlementsFrom,
-	getLicensing,
 	listLicenses,
+	panelLicenseDto,
+	refreshPanelLicense,
 	releaseLicense,
 	setLicenseRevoked,
 	setLicensingEnforced,
@@ -19,7 +20,11 @@ import { requireAdmin, requireOwner } from "@/lib/auth"
 const putSchema = z.object({ enforced: z.boolean() })
 
 const postSchema = z.object({
-	activate: z.string().trim().min(4).max(64).optional(),
+	/** activate a 12-character code for the whole install */
+	activate: z.string().trim().min(8).max(40).optional(),
+	refresh: z.boolean().optional(),
+	clear: z.boolean().optional(),
+	/** vendor side: mint new codes */
 	create: z
 		.object({
 			count: z.number().int().min(1).max(50).optional(),
@@ -29,21 +34,19 @@ const postSchema = z.object({
 			note: z.string().max(200).optional(),
 		})
 		.optional(),
-	code: z.string().trim().min(4).max(64).optional(),
+	code: z.string().trim().min(8).max(40).optional(),
 	revoked: z.boolean().optional(),
 	release: z.boolean().optional(),
 	remove: z.boolean().optional(),
 })
 
-/** Own entitlements for every admin; the whole key list for the owner. */
+/** Every admin sees the install license; only the owner sees the minted codes. */
 export const GET = route(async () => {
 	const me = await requireAdmin()
-	const cfg = await getLicensing()
 	const isOwner = me.role === "OWNER"
 	return ok({
 		isOwner,
-		enforced: cfg.enforced,
-		mine: entitlementsFrom(cfg, me),
+		panel: await panelLicenseDto(),
 		features: LICENSE_FEATURES.map((id) => ({ id, label: LICENSE_FEATURE_LABELS[id] })),
 		licenses: isOwner ? await listLicenses() : [],
 	})
@@ -57,9 +60,11 @@ export const PUT = route(async (req) => {
 })
 
 export const POST = route(async (req) => {
-	const me = await requireAdmin()
+	const me = await requireOwner()
 	const body = await parseBody(req, postSchema)
-	if (body.activate) return ok({ license: await activateLicense(me, body.activate) })
+	if (body.activate) return ok({ panel: await activatePanelLicense(me, body.activate) })
+	if (body.refresh) return ok({ panel: await refreshPanelLicense(me) })
+	if (body.clear) return ok({ panel: await clearPanelLicense(me) })
 	if (body.create) return ok({ created: await createLicenses(me, body.create) })
 	if (body.code && body.remove) return ok(await deleteLicense(me, body.code))
 	if (body.code && body.release) return ok({ license: await releaseLicense(me, body.code) })
