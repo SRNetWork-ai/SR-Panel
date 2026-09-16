@@ -34,21 +34,21 @@ export function SettingsClient({ me, brand: initialBrand, info, initialTab }: { 
 	const [brand, setBrand] = useState<Brand>(initialBrand)
 	const [totpOn, setTotpOn] = useState(me.totpEnabled)
 
-	const alertsTab: TabItem<LocalTab> = { id: "alerts", label: L("\\u0647\\u0634\\u062f\\u0627\\u0631 \\u0648 \\u0633\\u06cc\\u0627\\u0633\\u062a\\u200c\\u0647\\u0627", "Alerts & policies"), icon: Bell }
-	const mailTab: TabItem<LocalTab> = { id: "mail", label: L("\\u0627\\u06cc\\u0645\\u06cc\\u0644 \\u0648 \\u06a9\\u062f \\u0648\\u0631\\u0648\\u062f", "Email & login code"), icon: Mail }
+	const alertsTab: TabItem<LocalTab> = { id: "alerts", label: L("\u0647\u0634\u062f\u0627\u0631 \u0648 \u0633\u06cc\u0627\u0633\u062a\u200c\u0647\u0627", "Alerts & policies"), icon: Bell }
+	const mailTab: TabItem<LocalTab> = { id: "mail", label: L("\u0627\u06cc\u0645\u06cc\u0644 \u0648 \u06a9\u062f \u0648\u0631\u0648\u062f", "Email & login code"), icon: Mail }
 
 	const tabs: Array<TabItem<LocalTab>> = [
 		{ id: "account", label: t("set_account"), icon: UserCircle2 },
-		{ id: "security", label: L("\\u0627\\u0645\\u0646\\u06cc\\u062a", "Security"), icon: ShieldCheck, badge: totpOn ? "2FA" : undefined },
-		{ id: "session", label: L("\\u0646\\u0634\\u0633\\u062a \\u0648 \\u0642\\u0641\\u0644 \\u062e\\u0648\\u062f\\u06a9\\u0627\\u0631", "Session & lock"), icon: Clock },
+		{ id: "security", label: L("\u0627\u0645\u0646\u06cc\u062a", "Security"), icon: ShieldCheck, badge: totpOn ? "2FA" : undefined },
+		{ id: "session", label: L("\u0646\u0634\u0633\u062a \u0648 \u0642\u0641\u0644 \u062e\u0648\u062f\u06a9\u0627\u0631", "Session & lock"), icon: Clock },
 		{ id: "brand", label: t("set_brand"), icon: Palette },
-		{ id: "domain", label: L("\\u062f\\u0627\\u0645\\u0646\\u0647\\u0654 \\u0627\\u062e\\u062a\\u0635\\u0627\\u0635\\u06cc", "Custom domain"), icon: Globe2 },
+		{ id: "domain", label: L("\u062f\u0627\u0645\u0646\u0647\u0654 \u0627\u062e\u062a\u0635\u0627\u0635\u06cc", "Custom domain"), icon: Globe2 },
 		{ id: "appearance", label: t("set_appearance"), icon: Sparkles },
-		{ id: "license", label: L("\\u0644\\u0627\\u06cc\\u0633\\u0646\\u0633 \\u0648 \\u067e\\u0631\\u0645\\u06cc\\u0648\\u0645", "License & premium"), icon: KeyRound },
+		{ id: "license", label: L("\u0644\u0627\u06cc\u0633\u0646\u0633 \u0648 \u067e\u0631\u0645\u06cc\u0648\u0645", "License & premium"), icon: KeyRound },
 		...(isOwner ? [mailTab] : []),
-		{ id: "system", label: L("\\u0633\\u06cc\\u0633\\u062a\\u0645", "System"), icon: Settings2 },
+		{ id: "system", label: L("\u0633\u06cc\u0633\u062a\u0645", "System"), icon: Settings2 },
 		...(isOwner ? [alertsTab] : []),
-		{ id: "tools", label: L("\\u0639\\u06cc\\u0628\\u200c\\u06cc\\u0627\\u0628\\u06cc", "Diagnostics"), icon: Stethoscope },
+		{ id: "tools", label: L("\u0639\u06cc\u0628\u200c\u06cc\u0627\u0628\u06cc", "Diagnostics"), icon: Stethoscope },
 	]
 
 	return (
@@ -56,13 +56,13 @@ export function SettingsClient({ me, brand: initialBrand, info, initialTab }: { 
 			<PageHeader
 				title={t("set_title")}
 				subtitle={L(
-					"\\u062d\\u0633\\u0627\\u0628\\u060c \\u0627\\u0645\\u0646\\u06cc\\u062a\\u060c \\u0646\\u0634\\u0633\\u062a\\u060c \\u0628\\u0631\\u0646\\u062f\\u06cc\\u0646\\u06af\\u060c \\u0638\\u0627\\u0647\\u0631\\u060c \\u0644\\u0627\\u06cc\\u0633\\u0646\\u0633\\u060c \\u0627\\u06cc\\u0645\\u06cc\\u0644\\u060c \\u0633\\u06cc\\u0633\\u062a\\u0645\\u060c \\u0647\\u0634\\u062f\\u0627\\u0631\\u0647\\u0627 \\u0648 \\u0639\\u06cc\\u0628\\u200c\\u06cc\\u0627\\u0628\\u06cc",
+					"\u062d\u0633\u0627\u0628\u060c \u0627\u0645\u0646\u06cc\u062a\u060c \u0646\u0634\u0633\u062a\u060c \u0628\u0631\u0646\u062f\u06cc\u0646\u06af\u060c \u0638\u0627\u0647\u0631\u060c \u0644\u0627\u06cc\u0633\u0646\u0633\u060c \u0627\u06cc\u0645\u06cc\u0644\u060c \u0633\u06cc\u0633\u062a\u0645\u060c \u0647\u0634\u062f\u0627\u0631\u0647\u0627 \u0648 \u0639\u06cc\u0628\u200c\u06cc\u0627\u0628\u06cc",
 					"Account, security, session, branding, appearance, license, email, system, alerts and diagnostics",
 				)}
 				actions={
 					<>
 						<Badge tone={isOwner ? "violet" : "cyan"}>{isOwner ? t("owner") : t("admin")}</Badge>
-						<Badge tone={totpOn ? "success" : "warning"}>{totpOn ? L("\\u062f\\u0648 \\u0645\\u0631\\u062d\\u0644\\u0647\\u200c\\u0627\\u06cc \\u0641\\u0639\\u0627\\u0644", "2FA on") : L("\\u062f\\u0648 \\u0645\\u0631\\u062d\\u0644\\u0647\\u200c\\u0627\\u06cc \\u062e\\u0627\\u0645\\u0648\\u0634", "2FA off")}</Badge>
+						<Badge tone={totpOn ? "success" : "warning"}>{totpOn ? L("\u062f\u0648 \u0645\u0631\u062d\u0644\u0647\u200c\u0627\u06cc \u0641\u0639\u0627\u0644", "2FA on") : L("\u062f\u0648 \u0645\u0631\u062d\u0644\u0647\u200c\u0627\u06cc \u062e\u0627\u0645\u0648\u0634", "2FA off")}</Badge>
 						<Badge tone="muted">{info.version}</Badge>
 					</>
 				}
