@@ -2,7 +2,7 @@
 
 import { useRouter } from "next/navigation"
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent as ReactKeyboardEvent } from "react"
-import { Clock, Eye, EyeOff, Info, KeyRound, LockKeyhole, ShieldCheck, UserRound } from "lucide-react"
+import { Clock, Eye, EyeOff, Info, KeyRound, LockKeyhole, Mail, ShieldCheck, UserRound } from "lucide-react"
 import { Button, Field, Input } from "@/components/ui"
 import { ApiError, api } from "@/lib/client"
 import { useLocale, useT, type DictKey } from "@/lib/i18n"
@@ -10,7 +10,11 @@ import { LoginAside, LoginTopBar } from "./LoginAside"
 
 type LoginResponse =
 	| { ok: true; admin: { id: string; username: string; role: "OWNER" | "ADMIN" } }
-	| { ok: false; reason: "invalid" | "disabled" | "totp_required" | "totp_invalid" | "locked"; retryAfterSec?: number }
+	| {
+			ok: false
+			reason: "invalid" | "disabled" | "totp_required" | "totp_invalid" | "locked" | "email_code_required" | "email_code_invalid"
+			retryAfterSec?: number
+	  }
 
 const REASON_KEY: Record<string, DictKey> = {
 	invalid: "login_invalid",
@@ -51,12 +55,17 @@ export default function LoginPage() {
 	const [remember, setRemember] = useState(false)
 	const [totp, setTotp] = useState("")
 	const [needTotp, setNeedTotp] = useState(false)
+	const [emailCode, setEmailCode] = useState("")
+	const [needEmail, setNeedEmail] = useState(false)
+	const [sentTo, setSentTo] = useState("")
+	const [sending, setSending] = useState(false)
 	const [error, setError] = useState<string | null>(null)
 	const [notice, setNotice] = useState<"idle" | "out" | null>(null)
 	const [lockSec, setLockSec] = useState(0)
 	const [next, setNext] = useState("/dashboard")
 	const [busy, setBusy] = useState(false)
 	const autoSent = useRef("")
+	const autoMail = useRef(false)
 	const locked = lockSec > 0
 
 	// the query string is read on the client, so the page stays statically renderable
@@ -91,6 +100,25 @@ export default function LoginPage() {
 		}
 	}
 
+	/** the code is mailed only after the server re-checked user + password */
+	const sendCode = async () => {
+		if (sending || locked || !username.trim() || !password) return
+		setSending(true)
+		setError(null)
+		try {
+			const r = await api<{ ok: boolean; to?: string; ttlMin?: number }>("/api/auth/login-code", {
+				method: "POST",
+				json: { username: username.trim().toLowerCase(), password },
+			})
+			setNeedEmail(true)
+			if (r.ok && r.to) setSentTo(r.to)
+		} catch (err) {
+			setError(err instanceof ApiError ? err.message : t("error_generic"))
+		} finally {
+			setSending(false)
+		}
+	}
+
 	const login = async () => {
 		if (busy || locked) return
 		setBusy(true)
@@ -99,7 +127,12 @@ export default function LoginPage() {
 		try {
 			const r = await api<LoginResponse>("/api/auth/login", {
 				method: "POST",
-				json: { username: username.trim().toLowerCase(), password, totp: needTotp && totp ? totp : undefined },
+				json: {
+					username: username.trim().toLowerCase(),
+					password,
+					totp: needTotp && totp ? totp : undefined,
+					emailCode: needEmail && emailCode.length === 6 ? emailCode : undefined,
+				},
 			})
 			if (r.ok) {
 				try {
@@ -114,6 +147,20 @@ export default function LoginPage() {
 			}
 			if (r.reason === "totp_required") {
 				setNeedTotp(true)
+				return
+			}
+			if (r.reason === "email_code_required") {
+				setNeedEmail(true)
+				if (!autoMail.current) {
+					autoMail.current = true
+					void sendCode()
+				}
+				return
+			}
+			if (r.reason === "email_code_invalid") {
+				setNeedEmail(true)
+				setEmailCode("")
+				setError(L("کد ایمیل درست نیست یا منقضی شده.", "The emailed code is wrong or expired."))
 				return
 			}
 			if (r.reason === "locked") {
@@ -266,6 +313,31 @@ export default function LoginPage() {
 								</div>
 							)}
 
+							{needEmail && (
+								<div className="space-y-2 rounded-2xl border border-line bg-surface p-3">
+									<div className="flex items-center gap-2 text-sm font-medium">
+										<Mail className="h-4 w-4 text-violet" />
+										<span>{L("کد ورود ایمیلی", "Emailed login code")}</span>
+									</div>
+									<p className="text-xs leading-5 text-muted">
+										{sentTo ? L("ارسال شد به ", "Sent to ") + sentTo : L("برای دریافت کد، دکمهٔ زیر را بزن.", "Press the button below to get a code.")}
+									</p>
+									<Input
+										className="srp-otp mono text-lg"
+										dir="ltr"
+										inputMode="numeric"
+										pattern="[0-9]{6}"
+										maxLength={6}
+										autoComplete="one-time-code"
+										value={emailCode}
+										onChange={(e) => setEmailCode(onlyDigits(e.target.value).slice(0, 6))}
+									/>
+									<button type="button" className="btn btn-ghost btn-sm w-full" onClick={() => void sendCode()} disabled={sending || locked}>
+										{sentTo ? L("ارسال مجدد کد", "Resend code") : L("ارسال کد به ایمیل", "Email me a code")}
+									</button>
+								</div>
+							)}
+
 							{locked && (
 								<div role="alert" className="flex items-start gap-2 rounded-xl border border-amber-400/30 bg-amber-400/10 px-3 py-2 text-sm text-amber-400">
 									<Clock className="mt-0.5 h-4 w-4 shrink-0" />
@@ -283,7 +355,13 @@ export default function LoginPage() {
 								</div>
 							)}
 
-							<Button type="submit" variant="primary" className="w-full" loading={busy} disabled={busy || locked || (needTotp && totp.length !== 6)}>
+							<Button
+								type="submit"
+								variant="primary"
+								className="w-full"
+								loading={busy}
+								disabled={busy || locked || (needTotp && totp.length !== 6) || (needEmail && emailCode.length !== 6)}
+							>
 								{locked ? L("ورود قفل است", "Sign-in locked") : t("sign_in")}
 							</Button>
 
