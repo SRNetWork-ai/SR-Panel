@@ -228,7 +228,6 @@ async function assertQuota(admin: Admin, extraBytes: bigint, targets: ClientTarg
 		if (count >= admin.clientLimit) throw new ForbiddenError(`سقف تعداد کلاینت (${admin.clientLimit}) پر شده است`)
 	}
 	if (admin.trafficQuota !== null) {
-		if (extraBytes === 0n) throw new ForbiddenError("با سهمیه محدود نمی‌توانید کلاینت نامحدود بسازید")
 		const agg = await prisma.client.aggregate({
 			where: { adminId: admin.id, ...(excludeClientId ? { id: { not: excludeClientId } } : {}) },
 			_sum: { trafficLimit: true },
