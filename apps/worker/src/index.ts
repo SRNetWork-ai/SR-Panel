@@ -7,6 +7,7 @@ import { Cron } from "croner"
 import { prisma } from "@srpanel/db"
 import {
 	activatePendingStarts,
+	autoRecheckLicense,
 	autoRefreshRates,
 	autoSyncBankDeposits,
 	autoUpdateTick,
@@ -107,7 +108,7 @@ async function logPrune() {
 	}
 }
 
-/** In-panel updates: periodic check, “new version” alert and the optional install window. */
+/** In-panel updates: periodic check, \u201cnew version\u201d alert and the optional install window. */
 async function autoUpdate() {
 	try {
 		const r = await autoUpdateTick()
@@ -157,6 +158,19 @@ async function usdtVerify() {
 	}
 }
 
+/**
+ * Licensing: a customer install re-verifies its code against the vendor panel,
+ * so a revoked or expired license stops unlocking premium on its own. Does
+ * nothing on the vendor install.
+ */
+async function licenseWatch() {
+	try {
+		if (await autoRecheckLicense()) log("license: re-checked with vendor")
+	} catch (err) {
+		warn("license recheck failed", err)
+	}
+}
+
 async function main() {
 	await ensureOwner()
 	log(`started (sync every ${INTERVAL}s, TZ=${process.env.TZ})`)
@@ -171,7 +185,7 @@ async function main() {
 		new Cron("0 40 3 * * *", { protect: true }, logPrune),
 		// in-panel updates (check / alert / optional install)
 		new Cron("0 25 * * * *", { protect: true }, autoUpdate),
-		// stage 2B — store
+		// stage 2B \u2014 store
 		new Cron("30 * * * * *", { protect: true }, paymentExpiry),
 		new Cron("10 */2 * * * *", { protect: true }, usdtVerify),
 		// automatic FX rate + card-to-card bank bridge
@@ -179,6 +193,8 @@ async function main() {
 		new Cron("40 */2 * * * *", { protect: true }, bankDeposits),
 		// delayed start ("start after first use")
 		new Cron("50 * * * * *", { protect: true }, delayedStarts),
+		// license watch (the job itself honours the 6h re-check interval)
+		new Cron("0 5 * * * *", { protect: true }, licenseWatch),
 	]
 	const botAbort = new AbortController()
 	const bot = pollTelegram(botAbort.signal, log).catch((err) => warn("telegram bot stopped", err))
@@ -189,9 +205,10 @@ async function main() {
 	await enforce()
 	await delayedStarts()
 	await refreshRates()
+	await licenseWatch()
 
 	const stop = async () => {
-		log("stopping…")
+		log("stopping\u2026")
 		jobs.forEach((j) => j.stop())
 		botAbort.abort()
 		await Promise.race([Promise.all([bot, shopBots]), new Promise((r) => setTimeout(r, 3000))])
