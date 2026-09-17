@@ -36,6 +36,8 @@ export type ClientOverview = {
 type BulkAction = "enable" | "disable" | "addDays" | "addGb" | "resetTraffic" | "repush" | "delete"
 type BulkFilter = { broken?: boolean; orphan?: boolean; expiredBeforeDays?: number }
 type BulkPayload = { ids?: string[]; filter?: BulkFilter; days?: number; gb?: number }
+/** one row of the maintenance card */
+type MaintenanceRow = { key: string; count: number; label: string; hint: string; action: BulkAction; filter: BulkFilter; danger: boolean }
 
 /** The API caps one call, so a bigger selection goes out in slices. */
 const CHUNK = 20
@@ -169,7 +171,7 @@ export function ClientMaintenance({ overview, onDone }: { overview: ClientOvervi
 	const { busy, run, L, locale, t } = useBulkRunner(onDone)
 	const confirm = useConfirm()
 	if (!overview) return null
-	const rows: Array<{ key: string; count: number; label: string; hint: string; action: BulkAction; filter: BulkFilter; danger: boolean }> = [
+	const all: MaintenanceRow[] = [
 		{
 			key: "broken",
 			count: overview.broken,
@@ -197,7 +199,8 @@ export function ClientMaintenance({ overview, onDone }: { overview: ClientOvervi
 			filter: { expiredBeforeDays: overview.staleDays },
 			danger: true,
 		},
-	].filter((r) => r.count > 0)
+	]
+	const rows = all.filter((r) => r.count > 0)
 
 	return (
 		<Card className="mt-4" title={L("\u0646\u06af\u0647\u062f\u0627\u0634\u062a", "Maintenance")} subtitle={L("\u067e\u0627\u06a9\u200c\u0633\u0627\u0632\u06cc \u0648 \u0631\u0641\u0639 \u0646\u0627\u0633\u0627\u0632\u06af\u0627\u0631\u06cc \u0628\u0627 \u067e\u0646\u0644", "Clean-up and panel drift repair")}>
