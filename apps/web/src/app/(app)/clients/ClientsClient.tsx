@@ -2,7 +2,7 @@
 
 import Link from "next/link"
 import { useRouter } from "next/navigation"
-import { useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useState } from "react"
 import { Copy, Pencil, Plus, QrCode, RotateCcw, Search, Trash2, UserPlus } from "lucide-react"
 import { ApiError, api, copyText } from "@/lib/client"
 import type { ClientDto, ServiceDto } from "@/lib/dto"
@@ -10,10 +10,13 @@ import { daysLeft, formatBytes, formatNumber, percent, relativeTime } from "@/li
 import { useLocale, useT } from "@/lib/i18n"
 import { QR } from "@/components/QR"
 import { Badge, Button, Card, Empty, Input, Modal, PageHeader, Progress, Select, StatusBadge, cx, useConfirm, useToast } from "@/components/ui"
+import { ClientBulkBar, ClientMaintenance, type ClientOverview } from "./BulkBar"
 import { ClientForm } from "./ClientForm"
 import { CreateClient, servicesForKind, type ClientKind, type ClientTypeAccess } from "./CreateClient"
 
 const STATUSES = ["", "ACTIVE", "EXPIRED", "LIMITED", "DISABLED"] as const
+/** rows per page — the list is paged instead of pulling everything at once */
+const TAKE = 50
 
 type RefundQuote = { amount: number; unusedGB: number; remainingDays: number }
 
@@ -29,7 +32,11 @@ export function ClientsClient({ initial, services, access, openNew, isOwner }: {
 	const [total, setTotal] = useState(initial.total)
 	const [q, setQ] = useState("")
 	const [status, setStatus] = useState<string>("")
+	const [page, setPage] = useState(0)
 	const [loading, setLoading] = useState(false)
+	/** ticked rows — drives the bulk bar */
+	const [sel, setSel] = useState<string[]>([])
+	const [overview, setOverview] = useState<ClientOverview | null>(null)
 	// «client limited» / «client unlimited» get their own form; editing keeps the old one
 	const [creating, setCreating] = useState<ClientKind | null>(openNew ? (access.limited ? "LIMITED" : access.unlimited ? "UNLIMITED" : null) : null)
 	const [editing, setEditing] = useState<ClientDto | null>(null)
@@ -43,22 +50,45 @@ export function ClientsClient({ initial, services, access, openNew, isOwner }: {
 	}, [access.limited, access.unlimited])
 	const kindLabel = (k: ClientKind) => (k === "LIMITED" ? L("کلاینت حجمی", "Limited client") : L("کلاینت نامحدود", "Unlimited client"))
 
+	const load = useCallback(async () => {
+		setLoading(true)
+		try {
+			const r = await api<{ items: ClientDto[]; total: number }>(`/api/clients?q=${encodeURIComponent(q)}&status=${status}&take=${TAKE}&skip=${page * TAKE}`)
+			setItems(r.items)
+			setTotal(r.total)
+			setSel([])
+		} catch {
+			/* ignore */
+		} finally {
+			setLoading(false)
+		}
+	}, [q, status, page])
+
+	/** chips + maintenance counters are optional, so a failure stays silent */
+	const loadOverview = useCallback(async () => {
+		try {
+			setOverview(await api<ClientOverview>("/api/clients/overview"))
+		} catch {
+			/* ignore */
+		}
+	}, [])
+
 	// live search (debounced)
 	useEffect(() => {
-		const h = setTimeout(async () => {
-			setLoading(true)
-			try {
-				const r = await api<{ items: ClientDto[]; total: number }>(`/api/clients?q=${encodeURIComponent(q)}&status=${status}&take=100`)
-				setItems(r.items)
-				setTotal(r.total)
-			} catch {
-				/* ignore */
-			} finally {
-				setLoading(false)
-			}
-		}, q ? 300 : 0)
+		const h = setTimeout(() => void load(), q ? 300 : 0)
 		return () => clearTimeout(h)
-	}, [q, status])
+	}, [load, q])
+
+	useEffect(() => void loadOverview(), [loadOverview])
+
+	// a new filter starts from the first page again
+	useEffect(() => setPage(0), [q, status])
+
+	const refreshAll = useCallback(() => {
+		void load()
+		void loadOverview()
+		router.refresh()
+	}, [load, loadOverview, router])
 
 	const saved = (c: ClientDto, created: boolean) => {
 		if (created) {
@@ -70,6 +100,7 @@ export function ClientsClient({ initial, services, access, openNew, isOwner }: {
 		}
 		setCreating(null)
 		setEditing(null)
+		void loadOverview()
 		router.refresh()
 	}
 
@@ -110,6 +141,7 @@ export function ClientsClient({ initial, services, access, openNew, isOwner }: {
 			setTotal((n) => n - 1)
 			if (r.refund > 0) toast.ok(`${L("ریفاند شد", "Refunded")}: ${formatNumber(r.refund, locale)} ${t("currency_irt")}`)
 			else if (r.errors?.length) toast.err(r.errors.join(" | "))
+			void loadOverview()
 			router.refresh()
 		} catch (err) {
 			toast.err(err instanceof ApiError ? err.message : t("error_generic"))
@@ -120,6 +152,20 @@ export function ClientsClient({ initial, services, access, openNew, isOwner }: {
 	}
 
 	const serviceMap = useMemo(() => new Map(services.map((s) => [s.id, s])), [services])
+
+	const pages = Math.max(1, Math.ceil(total / TAKE))
+	const allSel = items.length > 0 && sel.length === items.length
+	const toggleAll = () => setSel(allSel ? [] : items.map((c) => c.id))
+	const toggleOne = (id: string) => setSel((s) => (s.includes(id) ? s.filter((x) => x !== id) : [...s, id]))
+	const statusChips = overview
+		? [
+				{ value: "", label: t("all"), count: overview.total },
+				{ value: "ACTIVE", label: t("st_ACTIVE"), count: overview.active },
+				{ value: "EXPIRED", label: t("st_EXPIRED"), count: overview.expired },
+				{ value: "LIMITED", label: t("st_LIMITED"), count: overview.limited },
+				{ value: "DISABLED", label: t("st_DISABLED"), count: overview.disabled },
+			]
+		: []
 
 	return (
 		<div>
@@ -154,79 +200,114 @@ export function ClientsClient({ initial, services, access, openNew, isOwner }: {
 				</Select>
 			</div>
 
+			{/* quick filters: one click per status, plus two read-only counters */}
+			{overview && (
+				<div className="mb-4 flex flex-wrap items-center gap-2">
+					{statusChips.map((ch) => (
+						<button key={ch.value || "all"} type="button" className={cx("chip", status === ch.value && "chip-on")} onClick={() => setStatus(ch.value)}>
+							{ch.label} <span className="num">{formatNumber(ch.count, locale)}</span>
+						</button>
+					))}
+					<span className="chip">{L("آنلاین", "Online")} <span className="num">{formatNumber(overview.online, locale)}</span></span>
+					{overview.expiring > 0 && (
+						<span className="chip text-warning">{L("نزدیک انقضا", "Expiring")} <span className="num">{formatNumber(overview.expiring, locale)}</span></span>
+					)}
+				</div>
+			)}
+
 			<Card bodyClassName="px-0 pb-0" className={cx(loading && "opacity-70")}>
 				{items.length === 0 ? (
 					<Empty text={t("cl_empty")} action={kinds.length > 0 ? <Button variant="primary" size="sm" onClick={() => setCreating(kinds[0] ?? null)}><Plus className="h-4 w-4" />{t("cl_add")}</Button> : undefined} />
 				) : (
-					<div className="table-wrap">
-						<table className="table">
-							<thead>
-								<tr>
-									<th>{t("name")}</th>
-									<th>{t("status")}</th>
-									<th className="min-w-44">{t("cl_usage")}</th>
-									<th>{t("cl_expiry")}</th>
-									<th>{L("سرویس", "Service")}</th>
-									<th>{t("cl_online")}</th>
-									<th className="text-end">{t("actions")}</th>
-								</tr>
-							</thead>
-							<tbody>
-								{items.map((c) => {
-									const used = c.usedUp + c.usedDown
-									const pct = c.trafficLimit > 0 ? percent(used, c.trafficLimit) : 0
-									const dl = daysLeft(c.expiresAt)
-									const svc = c.serviceId ? serviceMap.get(c.serviceId) : undefined
-									// one client row can touch the same server several times (one per inbound)
-									const serverNames = [...new Set(c.servers.map((s) => s.serverName))]
-									const broken = c.servers.some((s) => !!s.lastError)
-									return (
-										<tr key={c.id}>
-											<td>
-												<div className="flex flex-wrap items-center gap-1.5">
-													{c.tag && <Badge tone="violet">{c.tag}</Badge>}
-													<Link href={`/clients/${c.id}`} className="font-medium hover:text-violet-soft">{c.name}</Link>
-													{c.trafficLimit === 0 && <Badge tone="muted">{L("نامحدود", "Unlimited")}</Badge>}
-												</div>
-												{c.note && <div className="max-w-48 truncate text-[11px] text-muted">{c.note}</div>}
-											</td>
-											<td><StatusBadge status={c.status} /></td>
-											<td>
-												<div className="mb-1 flex justify-between text-[11px] text-muted"><span className="num">{formatBytes(used)}</span><span className="num">{c.trafficLimit > 0 ? formatBytes(c.trafficLimit) : "∞"}</span></div>
-												<Progress value={pct} />
-											</td>
-											<td className="text-xs">
-												{c.expiresAt ? <span className={cx("num", dl !== null && dl <= 3 && "text-warning", dl !== null && dl <= 0 && "text-danger")}>{dl !== null && dl > 0 ? `${dl} ${t("days")}` : t("st_EXPIRED")}</span> : <span className="text-muted">{t("never")}</span>}
-											</td>
-											<td>
-												{svc ? (
-													<Badge tone={broken ? "danger" : "violet"}>{svc.name}</Badge>
-												) : serverNames.length > 0 ? (
-													<Badge tone={broken ? "danger" : "muted"}>{serverNames.join(" ، ")}</Badge>
-												) : (
-													<span className="text-xs text-muted">—</span>
-												)}
-												{c.servers.length > 0 && <div className="num mt-1 text-[11px] text-muted">{c.servers.length} {L("کانفیگ", "configs")}</div>}
-											</td>
-											<td className="text-xs text-muted">{relativeTime(c.lastOnlineAt, locale)}</td>
-											<td>
-												<div className="flex justify-end gap-1">
-													<Button size="icon" variant="ghost" title={t("copy")} onClick={() => copySub(c)}><Copy className="h-4 w-4" /></Button>
-													<Button size="icon" variant="ghost" title={t("cl_qr")} onClick={() => setQr(c)}><QrCode className="h-4 w-4" /></Button>
-													<Button size="icon" variant="ghost" title={t("edit")} onClick={() => setEditing(c)}><Pencil className="h-4 w-4" /></Button>
-													<Button size="icon" variant="ghost" title={t("cl_reset")} onClick={() => reset(c)}><RotateCcw className="h-4 w-4" /></Button>
-													<Button size="sm" variant="ghost" onClick={() => toggle(c)}>{c.status === "DISABLED" ? t("cl_enable") : t("cl_disable")}</Button>
-													<Button size="icon" variant="danger" title={t("delete")} onClick={() => remove(c)}><Trash2 className="h-4 w-4" /></Button>
-												</div>
-											</td>
-										</tr>
-									)
-								})}
-							</tbody>
-						</table>
-					</div>
+					<>
+						<div className="table-wrap">
+							<table className="table">
+								<thead>
+									<tr>
+										<th className="w-8"><input type="checkbox" className="h-4 w-4 accent-violet-500" checked={allSel} onChange={toggleAll} title={L("انتخاب همه", "Select all")} /></th>
+										<th>{t("name")}</th>
+										<th>{t("status")}</th>
+										<th className="min-w-44">{t("cl_usage")}</th>
+										<th>{t("cl_expiry")}</th>
+										<th>{L("سرویس", "Service")}</th>
+										<th>{t("cl_online")}</th>
+										<th className="text-end">{t("actions")}</th>
+									</tr>
+								</thead>
+								<tbody>
+									{items.map((c) => {
+										const used = c.usedUp + c.usedDown
+										const pct = c.trafficLimit > 0 ? percent(used, c.trafficLimit) : 0
+										const dl = daysLeft(c.expiresAt)
+										const svc = c.serviceId ? serviceMap.get(c.serviceId) : undefined
+										// one client row can touch the same server several times (one per inbound)
+										const serverNames = [...new Set(c.servers.map((s) => s.serverName))]
+										const broken = c.servers.some((s) => !!s.lastError)
+										return (
+											<tr key={c.id}>
+												<td><input type="checkbox" className="h-4 w-4 accent-violet-500" checked={sel.includes(c.id)} onChange={() => toggleOne(c.id)} /></td>
+												<td>
+													<div className="flex flex-wrap items-center gap-1.5">
+														{c.tag && <Badge tone="violet">{c.tag}</Badge>}
+														<Link href={`/clients/${c.id}`} className="font-medium hover:text-violet-soft">{c.name}</Link>
+														{c.trafficLimit === 0 && <Badge tone="muted">{L("نامحدود", "Unlimited")}</Badge>}
+													</div>
+													{c.note && <div className="max-w-48 truncate text-[11px] text-muted">{c.note}</div>}
+												</td>
+												<td><StatusBadge status={c.status} /></td>
+												<td>
+													<div className="mb-1 flex justify-between text-[11px] text-muted"><span className="num">{formatBytes(used)}</span><span className="num">{c.trafficLimit > 0 ? formatBytes(c.trafficLimit) : "∞"}</span></div>
+													<Progress value={pct} />
+												</td>
+												<td className="text-xs">
+													{c.expiresAt ? <span className={cx("num", dl !== null && dl <= 3 && "text-warning", dl !== null && dl <= 0 && "text-danger")}>{dl !== null && dl > 0 ? `${dl} ${t("days")}` : t("st_EXPIRED")}</span> : <span className="text-muted">{t("never")}</span>}
+												</td>
+												<td>
+													{svc ? (
+														<Badge tone={broken ? "danger" : "violet"}>{svc.name}</Badge>
+													) : serverNames.length > 0 ? (
+														<Badge tone={broken ? "danger" : "muted"}>{serverNames.join(" ، ")}</Badge>
+													) : (
+														<span className="text-xs text-muted">—</span>
+													)}
+													{c.servers.length > 0 && <div className="num mt-1 text-[11px] text-muted">{c.servers.length} {L("کانفیگ", "configs")}</div>}
+												</td>
+												<td className="text-xs text-muted">{relativeTime(c.lastOnlineAt, locale)}</td>
+												<td>
+													<div className="flex justify-end gap-1">
+														<Button size="icon" variant="ghost" title={t("copy")} onClick={() => copySub(c)}><Copy className="h-4 w-4" /></Button>
+														<Button size="icon" variant="ghost" title={t("cl_qr")} onClick={() => setQr(c)}><QrCode className="h-4 w-4" /></Button>
+														<Button size="icon" variant="ghost" title={t("edit")} onClick={() => setEditing(c)}><Pencil className="h-4 w-4" /></Button>
+														<Button size="icon" variant="ghost" title={t("cl_reset")} onClick={() => reset(c)}><RotateCcw className="h-4 w-4" /></Button>
+														<Button size="sm" variant="ghost" onClick={() => toggle(c)}>{c.status === "DISABLED" ? t("cl_enable") : t("cl_disable")}</Button>
+														<Button size="icon" variant="danger" title={t("delete")} onClick={() => remove(c)}><Trash2 className="h-4 w-4" /></Button>
+													</div>
+												</td>
+											</tr>
+										)
+									})}
+								</tbody>
+							</table>
+						</div>
+						{total > TAKE && (
+							<div className="flex flex-wrap items-center justify-between gap-2 border-t border-white/5 px-4 py-3 text-xs text-muted">
+								<span className="num">{formatNumber(page * TAKE + 1, locale)} - {formatNumber(page * TAKE + items.length, locale)} / {formatNumber(total, locale)}</span>
+								<div className="flex items-center gap-2">
+									<Button size="sm" variant="ghost" disabled={page === 0 || loading} onClick={() => setPage((p) => Math.max(0, p - 1))}>{L("قبلی", "Prev")}</Button>
+									<span className="num">{formatNumber(page + 1, locale)}/{formatNumber(pages, locale)}</span>
+									<Button size="sm" variant="ghost" disabled={page + 1 >= pages || loading} onClick={() => setPage((p) => p + 1)}>{L("بعدی", "Next")}</Button>
+								</div>
+							</div>
+						)}
+					</>
 				)}
 			</Card>
+
+			{/* bulk actions for the ticked rows */}
+			{sel.length > 0 && <ClientBulkBar ids={sel} onDone={refreshAll} onClear={() => setSel([])} />}
+
+			{/* our-side clean-up: broken configs, orphans, long expired */}
+			<ClientMaintenance overview={overview} onDone={refreshAll} />
 
 			{/* create — one form per client type, services filtered by what the owner offers */}
 			{creating !== null && (
