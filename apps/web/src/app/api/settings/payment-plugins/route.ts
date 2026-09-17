@@ -15,7 +15,8 @@ export const GET = route(async () => {
 /** The signing secret is returned exactly once, right here. */
 export const POST = route(async (req) => {
 	const admin = await requireAdmin()
-	const body = await parseBody(req, paymentPluginInput)
+	// parseBody hands back the schema's *input* shape, so parse once more to apply the defaults.
+	const body = paymentPluginInput.parse(await parseBody(req, paymentPluginInput))
 	return ok(await createPaymentPlugin(admin, body))
 })
 
