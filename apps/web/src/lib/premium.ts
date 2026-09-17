@@ -38,6 +38,8 @@ const PREMIUM_PATHS: ReadonlyArray<readonly [string, LicenseFeature]> = [
 	["/api/settings/client-types", "clientTemplates"],
 	// payment plugins (the public /api/hooks/pay callback stays free)
 	["/api/settings/payment-plugins", "paymentPlugin"],
+	// shared panels: a store plan that sells a reseller sub-panel
+	["/api/settings/panel-plans", "sharedPanel"],
 ]
 
 /** The paid feature a request path needs, or null when the path is free. */
