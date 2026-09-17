@@ -58,6 +58,42 @@ export * from "./services/payments"
 // payment plugins: an outside provider confirms an existing payment over a signed webhook
 export * from "./services/paymentPlugins"
 export * from "./services/paymentPluginHooks"
+// shared panels: a store plan hands the buyer their own reseller sub-panel
+export {
+	PANEL_PLANS_KEY,
+	panelPlanLinkSchema,
+	panelPlanBook,
+	savePanelPlanBook,
+	panelPlanFor,
+	listPanelPlans,
+	listPanelPlanOptions,
+	savePanelPlan,
+	deletePanelPlan,
+	listPanelAccounts,
+	type PanelPlanLink,
+	type PanelPlanBook,
+	type PanelPlanInput,
+	type PanelPlanDto,
+	type PanelPlanOption,
+	type PanelAccount,
+	type PanelAccountDto,
+} from "./services/panelPlans"
+export {
+	PANEL_HANDOFF_KEY,
+	panelLoginUrl,
+	newPanelPassword,
+	freePanelUsername,
+	parkPanelHandoff,
+	deliverPanelAccount,
+	pendingPanelHandoffs,
+	revealPanelHandoff,
+	resetPanelAccountPassword,
+	type PanelHandoff,
+	type PanelPackage,
+	type PanelHandoffDto,
+	type PanelCredentials,
+} from "./services/panelHandoff"
+export { provisionPanelOrder } from "./services/panelProvision"
 export * from "./services/store"
 // editable storefront content (hero / features / steps / FAQ)
 export * from "./services/storePage"
