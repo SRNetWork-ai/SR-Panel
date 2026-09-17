@@ -55,6 +55,9 @@ export * from "./services/storeSettings"
 // per-admin custom shop domain (Brand.customDomain + loop-back verification)
 export * from "./services/storeDomains"
 export * from "./services/payments"
+// payment plugins: an outside provider confirms an existing payment over a signed webhook
+export * from "./services/paymentPlugins"
+export * from "./services/paymentPluginHooks"
 export * from "./services/store"
 // editable storefront content (hero / features / steps / FAQ)
 export * from "./services/storePage"

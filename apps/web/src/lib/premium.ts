@@ -36,6 +36,8 @@ const PREMIUM_PATHS: ReadonlyArray<readonly [string, LicenseFeature]> = [
 	["/api/settings/reseller-bots", "salesBot"],
 	// client template system
 	["/api/settings/client-types", "clientTemplates"],
+	// payment plugins (the public /api/hooks/pay callback stays free)
+	["/api/settings/payment-plugins", "paymentPlugin"],
 ]
 
 /** The paid feature a request path needs, or null when the path is free. */
