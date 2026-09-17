@@ -204,3 +204,19 @@ export {
 	activatePendingStarts,
 	type PendingStart,
 } from "./services/pendingStart"
+// bulk client tools + the clients-page counters (loops over the single-client services)
+export {
+	CLIENT_BULK_MAX,
+	CLIENT_BULK_ACTIONS,
+	clientBulkFilterSchema,
+	clientBulkSchema,
+	resolveBulkClients,
+	runClientBulk,
+	clientOverview,
+	type ClientBulkAction,
+	type ClientBulkFilter,
+	type ClientBulkInput,
+	type ClientBulkFailure,
+	type ClientBulkResult,
+	type ClientOverview,
+} from "./services/clientBulk"
