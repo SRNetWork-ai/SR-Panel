@@ -1,19 +1,18 @@
 /**
- * Reading our own share URIs back into structured nodes.
+ * Structured view of one proxy node.
  *
  * `subscription/links.ts` writes vless / vmess / trojan / ss URIs for the apps that
  * speak the v2ray "base64 list" dialect. Clash/Mihomo and sing-box want a whole config
- * file instead, so the only way to stay in sync with the inbound logic is to parse back
- * what we just wrote: if a link works in v2rayNG, the generated YAML and JSON describe
- * exactly the same tunnel.
+ * file instead, so we parse our own links back (see `nodeUris.ts`) rather than
+ * duplicating the inbound logic: if a link works in v2rayNG, the generated YAML and
+ * JSON describe exactly the same tunnel.
  *
- * Nothing here touches the database or a panel - it is a pure string -> object
- * transform, which is also why it is safe to run on every subscription request.
+ * This module is pure string -> object plumbing: no database, no panel call.
  */
 
 export type NodeKind = "vless" | "vmess" | "trojan" | "ss"
 
-/** transports our links can carry; only the first four are portable (see isPortableNode) */
+/** transports our links can carry; only the first four are portable (isPortableNode) */
 export type NodeNetwork = "tcp" | "ws" | "grpc" | "httpupgrade" | "h2" | "kcp" | "xhttp" | "splithttp"
 
 export type ProxyNode = {
@@ -49,7 +48,7 @@ const PORTABLE_NETWORKS: readonly NodeNetwork[] = ["tcp", "ws", "grpc", "httpupg
 /**
  * Can this node be expressed in Mihomo / sing-box without lying about it?
  * mKCP, xhttp and splithttp have no equivalent there, and neither does tcp + http
- * obfuscation - such nodes are skipped instead of emitted as a broken proxy.
+ * obfuscation, so such nodes are skipped instead of emitted as a broken proxy.
  */
 export function isPortableNode(node: ProxyNode): boolean {
 	if (!PORTABLE_NETWORKS.includes(node.network)) return false
@@ -57,7 +56,7 @@ export function isPortableNode(node: ProxyNode): boolean {
 	return true
 }
 
-function decodeB64(raw: string): string {
+export function decodeB64(raw: string): string {
 	const clean = raw.trim().split("-").join("+").split("_").join("/")
 	if (!clean) return ""
 	const padded = clean + "=".repeat((4 - (clean.length % 4)) % 4)
@@ -68,7 +67,7 @@ function decodeB64(raw: string): string {
 	}
 }
 
-function tryDecode(value: string): string {
+export function tryDecode(value: string): string {
 	if (!value) return ""
 	try {
 		return decodeURIComponent(value)
@@ -78,28 +77,28 @@ function tryDecode(value: string): string {
 }
 
 /** IPv6 hosts arrive bracketed from `new URL`, but both config formats want them bare */
-function normalizeHost(raw: string): string {
+export function normalizeHost(raw: string): string {
 	const host = raw.trim()
 	if (host.startsWith("[") && host.endsWith("]")) return host.slice(1, -1)
 	return host
 }
 
-function pickInt(raw: string): number {
+export function pickInt(raw: string): number {
 	const num = Number.parseInt(raw.trim(), 10)
 	return Number.isFinite(num) && num > 0 ? Math.trunc(num) : 0
 }
 
-function pickPort(raw: string): number {
+export function pickPort(raw: string): number {
 	const port = pickInt(raw)
 	return port < 65536 ? port : 0
 }
 
-function truthy(raw: string | null): boolean {
+export function truthy(raw: string | null): boolean {
 	const value = (raw || "").trim().toLowerCase()
 	return value === "1" || value === "true" || value === "yes"
 }
 
-function splitAlpn(raw: string | null): string[] | undefined {
+export function splitAlpn(raw: string | null): string[] | undefined {
 	const parts = (raw || "")
 		.split(",")
 		.map((part) => part.trim())
@@ -107,7 +106,7 @@ function splitAlpn(raw: string | null): string[] | undefined {
 	return parts.length > 0 ? parts : undefined
 }
 
-function networkOf(raw: string | null): NodeNetwork {
+export function networkOf(raw: string | null): NodeNetwork {
 	const value = (raw || "").trim().toLowerCase()
 	if (value === "ws" || value === "websocket") return "ws"
 	if (value === "grpc" || value === "gun") return "grpc"
@@ -119,7 +118,7 @@ function networkOf(raw: string | null): NodeNetwork {
 	return "tcp"
 }
 
-function tlsOf(raw: string | null): ProxyNode["tls"] {
+export function tlsOf(raw: string | null): ProxyNode["tls"] {
 	const value = (raw || "").trim().toLowerCase()
 	if (value === "reality") return "reality"
 	if (value === "tls" || value === "xtls") return "tls"
@@ -127,7 +126,7 @@ function tlsOf(raw: string | null): ProxyNode["tls"] {
 }
 
 /** `/ws?ed=2048` -> path `/ws` plus 2048 bytes of websocket early data */
-function splitPath(raw: string): { path: string; earlyData: number } {
+export function splitPath(raw: string): { path: string; earlyData: number } {
 	const value = raw.trim()
 	const at = value.indexOf("?")
 	if (at < 0) return { path: value, earlyData: 0 }
@@ -141,7 +140,7 @@ function splitPath(raw: string): { path: string; earlyData: number } {
 }
 
 /** app-visible labels: drop control characters, keep it short, never empty */
-function cleanName(raw: string, fallback: string): string {
+export function cleanName(raw: string, fallback: string): string {
 	let out = ""
 	for (const ch of raw) {
 		const code = ch.codePointAt(0) || 0
@@ -154,7 +153,7 @@ function cleanName(raw: string, fallback: string): string {
 }
 
 /** both formats key their proxy groups by name, so duplicates would silently vanish */
-function uniqueName(raw: string, used: Set<string>): string {
+export function uniqueName(raw: string, used: Set<string>): string {
 	let name = raw
 	let counter = 2
 	while (used.has(name)) {
@@ -164,34 +163,3 @@ function uniqueName(raw: string, used: Set<string>): string {
 	used.add(name)
 	return name
 }
-
-function parseUrlLike(kind: "vless" | "trojan", raw: string, fallbackName: string): ProxyNode | null {
-	let url: URL
-	try {
-		url = new URL(raw)
-	} catch {
-		return null
-	}
-	const host = normalizeHost(url.hostname)
-	const port = pickPort(url.port)
-	const secret = tryDecode(url.username)
-	if (!host || !port || !secret) return null
-	// searchParams already percent-decodes every value, so no second decode here
-	const q = url.searchParams
-	const node: ProxyNode = {
-		kind,
-		name: cleanName(tryDecode(url.hash.slice(1)), fallbackName),
-		host,
-		port,
-		secret,
-		network: networkOf(q.get("type")),
-		tls: tlsOf(q.get("security")),
-	}
-	const sni = (q.get("sni") || "").trim()
-	if (sni) node.sni = sni
-	const alpn = splitAlpn(q.get("alpn"))
-	if (alpn) node.alpn = alpn
-	const fingerprint = (q.get("fp") || "").trim()
-	if (fingerprint) node.fingerprint = fingerprint
-	if (truthy(q.get("allowInsecure")) || truthy(q.get("insecure"))) node.insecure = true
-	const flow = (q.get("
