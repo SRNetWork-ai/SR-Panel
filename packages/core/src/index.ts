@@ -220,6 +220,14 @@ export {
 	type ClientBulkResult,
 	type ClientOverview,
 } from "./services/clientBulk"
+// adopting the clients an existing panel already has (owner only, read-only on the panel)
+export {
+	scanPanelClients,
+	importPanelClients,
+	type PanelClientRow,
+	type PanelScanResult,
+	type PanelImportResult,
+} from "./services/panelImport"
 // Clash/Mihomo + sing-box subscription output (parsed back from our own share URIs)
 export { isPortableNode, type NodeKind, type NodeNetwork, type ProxyNode, type ShareLink } from "./subscription/nodes"
 export { parseShareUri, parseShareUris } from "./subscription/nodeUris"
