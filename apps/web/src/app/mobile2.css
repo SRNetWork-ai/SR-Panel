@@ -1,0 +1,99 @@
+/* mobile2.css — phase 32 mobile polish.
+ * Imported AFTER opaque.css in layout.tsx so these rules win.
+ * Everything here is inside a max-width media query: desktop is untouched. */
+
+/* ---- 1) never allow the page to scroll sideways on phones/tablets ---- */
+@media (max-width: 1023.98px) {
+	html,
+	body {
+		overflow-x: hidden;
+		max-width: 100%;
+	}
+	img,
+	svg,
+	video,
+	canvas,
+	iframe,
+	table {
+		max-width: 100%;
+	}
+	.srp-main {
+		padding-inline: 0.75rem;
+	}
+	pre,
+	code {
+		white-space: pre-wrap;
+		word-break: break-word;
+	}
+}
+
+/* ---- 2) in-page tab bars: scroll horizontally instead of wrapping ----
+ * globals.css gives .seg flex-wrap, which stacks tabs into 2-3 rows on a phone. */
+@media (max-width: 767.98px) {
+	.seg {
+		flex-wrap: nowrap;
+		overflow-x: auto;
+		overflow-y: hidden;
+		scrollbar-width: none;
+		-webkit-overflow-scrolling: touch;
+	}
+	.seg::-webkit-scrollbar {
+		display: none;
+	}
+	.seg-item {
+		flex: 0 0 auto;
+		white-space: nowrap;
+	}
+}
+
+/* ---- 3) tables: full-bleed scroller + tighter rows ---- */
+@media (max-width: 640px) {
+	.table-wrap {
+		margin-inline: -0.9rem;
+		padding-inline: 0.9rem;
+		overflow-x: auto;
+		-webkit-overflow-scrolling: touch;
+	}
+	.table th,
+	.table td {
+		padding: 0.55rem 0.5rem;
+		font-size: 12.5px;
+	}
+	.table .btn {
+		min-height: 34px;
+		padding-inline: 0.5rem;
+	}
+}
+
+/* ---- 4) cards: reclaim the 40px wasted on each side at small widths ----
+ * Selectors are deliberately narrow (utility class on the card itself or on a
+ * direct header/div child) so nested sections are not double-indented. */
+@media (max-width: 480px) {
+	.glass > header.px-5,
+	.glass > div.px-5 {
+		padding-inline: 0.9rem;
+	}
+	.glass > div.pb-5 {
+		padding-bottom: 0.9rem;
+	}
+	.glass.p-5 {
+		padding: 0.9rem;
+	}
+	.glass.p-4 {
+		padding: 0.8rem;
+	}
+}
+
+/* ---- 5) misc touch fixes ---- */
+@media (max-width: 767.98px) {
+	.btn {
+		max-width: 100%;
+	}
+	.recharts-responsive-container {
+		max-width: 100% !important;
+	}
+	/* dvh keeps the modal inside the visible area when the URL bar is showing */
+	.max-h-\[92vh\] {
+		max-height: 92dvh;
+	}
+}
