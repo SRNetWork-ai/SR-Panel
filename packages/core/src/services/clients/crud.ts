@@ -5,6 +5,7 @@ import { bytesToGb, daysFromNow, gbToBytes } from "../../util/bytes"
 import { AppError } from "../../util/errors"
 import { configLabel, sanitizeConfigName } from "../../util/naming"
 import { audit } from "../audit"
+import { assertClientKind, kindFromGB } from "../clientTypes"
 import { clearPendingStart, setPendingStart, withPendingNote } from "../pendingStart"
 import { adapterFor, inboundsOf, recomputeClient } from "../servers"
 import { resolveServiceTargets } from "../services"
@@ -20,7 +21,10 @@ export async function createClient(actor: Admin, input: CreateClientInput): Prom
 	const tag = sanitizeConfigName(input.tag, "") || null
 	const targets = input.serviceId ? await resolveServiceTargets(actor, input.serviceId) : normalizeTargets(input.targets ?? [])
 	if (!targets.length) throw new AppError("یک سرویس یا دست‌کم یک اینباند انتخاب کنید")
-	const limitBytes = BigInt(gbToBytes(Math.max(0, input.trafficGB)))
+	const trafficGB = Math.max(0, input.trafficGB)
+	// «حجمی / نامحدود»: what this reseller may sell, how big, and on which service
+	await assertClientKind(actor, kindFromGB(trafficGB), input.serviceId ?? null, { trafficGB })
+	const limitBytes = BigInt(gbToBytes(trafficGB))
 	await assertQuota(actor, limitBytes, targets)
 	const cost = await quoteClientCost(actor, input.trafficGB, input.days)
 	await assertAffordable(actor, cost)
@@ -98,7 +102,10 @@ export async function updateClient(actor: Admin, id: string, input: UpdateClient
 	}
 	if (input.tag !== undefined) data.tag = sanitizeConfigName(input.tag, "") || null
 	if (input.trafficGB !== undefined) {
-		const bytes = BigInt(gbToBytes(Math.max(0, input.trafficGB)))
+		const gb = Math.max(0, input.trafficGB)
+		// switching a client between «حجمی» and «نامحدود» obeys the same caps as creating one
+		await assertClientKind(actor, kindFromGB(gb), current.serviceId, { trafficGB: gb, excludeClientId: current.id })
+		const bytes = BigInt(gbToBytes(gb))
 		await assertQuota(actor, bytes, [], current.id)
 		data.trafficLimit = bytes
 	}
