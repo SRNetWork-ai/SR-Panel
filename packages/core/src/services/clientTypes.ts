@@ -156,13 +156,66 @@ export async function assertClientKind(actor: ActorLike, kind: ClientKind, servi
 	if (kind === "LIMITED" && !allowed.limited) throw new ForbiddenError("اجازهٔ ساخت کلاینت حجمی را ندارید")
 	if (kind === "UNLIMITED" && !allowed.unlimited) throw new ForbiddenError("اجازهٔ ساخت کلاینت نامحدود را ندارید")
 	if (kind === "LIMITED" && allowed.limitedMaxGB > 0 && (opts.trafficGB ?? 0) > allowed.limitedMaxGB)
-		throw new ForbiddenError(`\u062d\u062c\u0645 \u0647\u0631 \u06a9\u0644\u0627\u06cc\u0646\u062a \u062d\u062f\u0627\u06a9\u062b\u0631 ${allowed.limitedMaxGB} \u06af\u06cc\u06af\u0627\u0628\u0627\u06cc\u062a \u0627\u0633\u062a`)
+		throw new ForbiddenError(`حجم هر کلاینت حداکثر ${allowed.limitedMaxGB} گیگابایت است`)
 	if (kind === "UNLIMITED" && allowed.unlimitedMax > 0) {
 		const used = await countUnlimitedClients(actor, opts.excludeClientId)
-		if (used >= allowed.unlimitedMax)
-			throw new ForbiddenError(`\u0633\u0642\u0641 \u06a9\u0644\u0627\u06cc\u0646\u062a \u0646\u0627\u0645\u062d\u062f\u0648\u062f \u0634\u0645\u0627 (${allowed.unlimitedMax}) \u067e\u0631 \u0634\u062f\u0647 \u0627\u0633\u062a`)
+		if (used >= allowed.unlimitedMax) throw new ForbiddenError(`سقف کلاینت نامحدود شما (${allowed.unlimitedMax}) پر شده است`)
 	}
 	if (!serviceId) return
 	const sk = serviceKindOf(settings, serviceId)
 	if (sk !== "BOTH" && sk !== kind) throw new AppError(`این سرویس فقط برای کلاینت «${KIND_LABELS[sk]}» ارائه می‌شود`, 400, "service_kind")
+}
+
+/* ------------------------------------------------------------------ *
+ * owner board — everything the settings tab renders in one round-trip
+ * ------------------------------------------------------------------ */
+
+export interface ClientTypesAdminRow extends KindAccess {
+	id: string
+	username: string
+	/** unlimited clients this reseller already owns */
+	unlimitedUsed: number
+	/** true while no explicit row is stored and the defaults still apply */
+	inherited: boolean
+}
+
+export interface ClientTypesServiceRow {
+	id: string
+	name: string
+	isActive: boolean
+	kind: ServiceKind
+}
+
+export interface ClientTypesBoard {
+	settings: ClientTypeSettings
+	admins: ClientTypesAdminRow[]
+	services: ClientTypesServiceRow[]
+}
+
+/** Owner-only view: defaults, every reseller with its live usage, every service. */
+export async function clientTypesBoard(): Promise<ClientTypesBoard> {
+	const [settings, admins, services, unlimited] = await Promise.all([
+		getClientTypeSettings(),
+		prisma.admin.findMany({ where: { role: { not: "OWNER" } }, select: { id: true, username: true }, orderBy: { username: "asc" } }),
+		prisma.service.findMany({ select: { id: true, name: true, isActive: true }, orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] }),
+		prisma.client.groupBy({ by: ["adminId"], where: { trafficLimit: 0n }, _count: { _all: true } }),
+	])
+	const used = new Map(unlimited.map((row) => [row.adminId, row._count._all]))
+	return {
+		settings,
+		admins: admins.map((a) => {
+			const row = settings.admins[a.id]
+			return {
+				id: a.id,
+				username: a.username,
+				limited: row?.limited ?? settings.defaultLimited,
+				unlimited: row?.unlimited ?? settings.defaultUnlimited,
+				unlimitedMax: row?.unlimitedMax ?? settings.defaultUnlimitedMax,
+				limitedMaxGB: row?.limitedMaxGB ?? settings.defaultLimitedMaxGB,
+				unlimitedUsed: used.get(a.id) ?? 0,
+				inherited: !row,
+			}
+		}),
+		services: services.map((s) => ({ ...s, kind: serviceKindOf(settings, s.id) })),
+	}
 }
