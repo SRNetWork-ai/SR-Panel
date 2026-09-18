@@ -220,3 +220,16 @@ export {
 	type ClientBulkResult,
 	type ClientOverview,
 } from "./services/clientBulk"
+// Clash/Mihomo + sing-box subscription output (parsed back from our own share URIs)
+export { isPortableNode, type NodeKind, type NodeNetwork, type ProxyNode, type ShareLink } from "./subscription/nodes"
+export { parseShareUri, parseShareUris } from "./subscription/nodeUris"
+export { toClashConfig, type ClashOptions } from "./subscription/clash"
+export { toSingboxConfig, type SingboxOptions } from "./subscription/singbox"
+export {
+	SUB_FORMATS,
+	detectSubFormat,
+	renderSubscription,
+	type SubFormat,
+	type RenderSubscriptionInput,
+	type RenderedSubscription,
+} from "./subscription/formats"
