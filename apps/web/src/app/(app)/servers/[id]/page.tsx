@@ -1,3 +1,4 @@
+import Link from "next/link"
 import { notFound, redirect } from "next/navigation"
 import { serverDetail } from "@srpanel/core"
 import { requireAdmin } from "@/lib/auth"
@@ -11,5 +12,14 @@ export default async function ServerDetailPage({ params }: { params: Promise<{ i
 	const { id } = await params
 	const detail = await serverDetail(id).catch(() => null)
 	if (!detail) notFound()
-	return <ServerDetailClient initial={detail} />
+	return (
+		<>
+			<div className="mb-3 flex justify-end">
+				<Link href={`/servers/${id}/import`} className="btn btn-sm">
+					ایمپورت کلاینت‌های پنل
+				</Link>
+			</div>
+			<ServerDetailClient initial={detail} />
+		</>
+	)
 }
