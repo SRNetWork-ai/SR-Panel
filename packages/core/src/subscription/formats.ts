@@ -23,6 +23,8 @@ export type RenderSubscriptionInput = {
 	base64: string
 	/** non-dialable "quota / expiry" pseudo config: base64 and links only */
 	infoUri?: string | null
+	/** extra dialable URIs (external links); when present the base64 body is rebuilt */
+	extra?: readonly string[]
 	title?: string
 	group?: string
 	pageUrl?: string
@@ -61,13 +63,24 @@ function groupOf(input: RenderSubscriptionInput): string {
 	return title || "SR-Panel"
 }
 
+/** our own links first, then whatever the owner attached from outside */
+function dialable(input: RenderSubscriptionInput): ShareLink[] {
+	const out: ShareLink[] = []
+	for (const link of input.links) {
+		const uri = (typeof link === "string" ? link : link.uri || "").trim()
+		if (uri) out.push(link)
+	}
+	for (const uri of input.extra ?? []) {
+		const clean = uri.trim()
+		if (clean) out.push(clean)
+	}
+	return out
+}
+
 function uriList(input: RenderSubscriptionInput): string[] {
 	const uris: string[] = []
 	if (input.infoUri) uris.push(input.infoUri)
-	for (const link of input.links) {
-		const uri = (typeof link === "string" ? link : link.uri || "").trim()
-		if (uri) uris.push(uri)
-	}
+	for (const link of dialable(input)) uris.push(typeof link === "string" ? link : link.uri)
 	return uris
 }
 
@@ -75,7 +88,7 @@ export function renderSubscription(format: SubFormat, input: RenderSubscriptionI
 	// the info pseudo config is not dialable, so it stays out of the full configs:
 	// inside a proxy group it would be picked by url-test and break the connection
 	if (format === "clash") {
-		const body = toClashConfig(parseShareUris(input.links), {
+		const body = toClashConfig(parseShareUris(dialable(input)), {
 			group: groupOf(input),
 			title: input.title,
 			pageUrl: input.pageUrl,
@@ -83,11 +96,14 @@ export function renderSubscription(format: SubFormat, input: RenderSubscriptionI
 		return { format, body, contentType: "text/yaml; charset=utf-8", extension: "yaml" }
 	}
 	if (format === "singbox") {
-		const body = toSingboxConfig(parseShareUris(input.links), { group: groupOf(input) })
+		const body = toSingboxConfig(parseShareUris(dialable(input)), { group: groupOf(input) })
 		return { format, body, contentType: "application/json; charset=utf-8", extension: "json" }
 	}
 	if (format === "links") {
 		return { format, body: uriList(input).join("\n") + "\n", contentType: TEXT, extension: "txt" }
 	}
-	return { format: "base64", body: input.base64, contentType: TEXT, extension: "txt" }
+	// without external links the stored body is reused byte for byte
+	const hasExtra = (input.extra ?? []).length > 0
+	const body = hasExtra ? Buffer.from(uriList(input).join("\n"), "utf8").toString("base64") : input.base64
+	return { format: "base64", body, contentType: TEXT, extension: "txt" }
 }

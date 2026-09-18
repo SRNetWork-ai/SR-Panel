@@ -1,7 +1,7 @@
 "use client"
 
 import { useState } from "react"
-import { Bell, Clock, Globe2, KeyRound, Mail, Palette, Settings2, ShieldCheck, Sparkles, Stethoscope, UserCircle2 } from "lucide-react"
+import { Bell, Clock, Globe2, KeyRound, Link2, Mail, Palette, Settings2, ShieldCheck, Sparkles, Stethoscope, UserCircle2 } from "lucide-react"
 import type { AdminDto } from "@/lib/dto"
 import { useLocale, useT } from "@/lib/i18n"
 import { Badge, PageHeader } from "@/components/ui"
@@ -11,6 +11,7 @@ import { AlertsTab } from "./AlertsTab"
 import { AppearanceTab } from "./AppearanceTab"
 import { BrandTab } from "./BrandTab"
 import { DomainTab } from "./DomainTab"
+import { ExternalLinksTab } from "./ExternalLinksTab"
 import { LicenseTab } from "./LicenseTab"
 import { MailTab } from "./MailTab"
 import { SecurityTab } from "./SecurityTab"
@@ -21,8 +22,8 @@ import { tr, type Brand, type SystemInfo, type Tab } from "./types"
 
 export type { SystemInfo } from "./types"
 
-/** `license`, `mail` and `domain` live only in this screen, so they stay out of the deep-link Tab union. */
-type LocalTab = Tab | "license" | "mail" | "domain"
+/** `license`, `mail`, `domain` and `external` live only in this screen, so they stay out of the deep-link Tab union. */
+type LocalTab = Tab | "license" | "mail" | "domain" | "external"
 
 export function SettingsClient({ me, brand: initialBrand, info, initialTab }: { me: AdminDto; brand: Brand; info: SystemInfo; initialTab?: Tab }) {
 	const t = useT()
@@ -36,6 +37,7 @@ export function SettingsClient({ me, brand: initialBrand, info, initialTab }: { 
 
 	const alertsTab: TabItem<LocalTab> = { id: "alerts", label: L("\u0647\u0634\u062f\u0627\u0631 \u0648 \u0633\u06cc\u0627\u0633\u062a\u200c\u0647\u0627", "Alerts & policies"), icon: Bell }
 	const mailTab: TabItem<LocalTab> = { id: "mail", label: L("\u0627\u06cc\u0645\u06cc\u0644 \u0648 \u06a9\u062f \u0648\u0631\u0648\u062f", "Email & login code"), icon: Mail }
+	const externalTab: TabItem<LocalTab> = { id: "external", label: L("\u0644\u06cc\u0646\u06a9\u200c\u0647\u0627\u06cc \u062e\u0627\u0631\u062c\u06cc", "External links"), icon: Link2 }
 
 	const tabs: Array<TabItem<LocalTab>> = [
 		{ id: "account", label: t("set_account"), icon: UserCircle2 },
@@ -46,6 +48,7 @@ export function SettingsClient({ me, brand: initialBrand, info, initialTab }: { 
 		{ id: "appearance", label: t("set_appearance"), icon: Sparkles },
 		{ id: "license", label: L("\u0644\u0627\u06cc\u0633\u0646\u0633 \u0648 \u067e\u0631\u0645\u06cc\u0648\u0645", "License & premium"), icon: KeyRound },
 		...(isOwner ? [mailTab] : []),
+		...(isOwner ? [externalTab] : []),
 		{ id: "system", label: L("\u0633\u06cc\u0633\u062a\u0645", "System"), icon: Settings2 },
 		...(isOwner ? [alertsTab] : []),
 		{ id: "tools", label: L("\u0639\u06cc\u0628\u200c\u06cc\u0627\u0628\u06cc", "Diagnostics"), icon: Stethoscope },
@@ -77,6 +80,7 @@ export function SettingsClient({ me, brand: initialBrand, info, initialTab }: { 
 			{tab === "appearance" && <AppearanceTab brand={brand} />}
 			{tab === "license" && <LicenseTab />}
 			{tab === "mail" && isOwner && <MailTab />}
+			{tab === "external" && isOwner && <ExternalLinksTab />}
 			{tab === "system" && <SystemTab me={me} info={info} />}
 			{tab === "alerts" && isOwner && <AlertsTab />}
 			{tab === "tools" && <ToolsTab info={info} />}
