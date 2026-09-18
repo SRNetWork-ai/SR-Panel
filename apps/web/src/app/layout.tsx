@@ -5,8 +5,10 @@ import "./globals.css"
 import "./nav3d.css"
 import "./motion3d.css"
 import "./mobile.css"
-// must stay last: fixes transparency / 3D-overflow / duplicated .srp-tab rules above
+// fixes transparency / 3D-overflow / duplicated .srp-tab rules above
 import "./opaque.css"
+// must stay last: phone-only overrides that have to win over opaque.css
+import "./mobile2.css"
 import IdleGuard from "@/components/IdleGuard"
 import { ToastProvider } from "@/components/ui"
 import { IDLE_MIN_COOKIE, SESSION_COOKIE, currentLocale, currentTheme, idleMinutesOf } from "@/lib/auth"
