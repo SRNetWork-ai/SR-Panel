@@ -1,4 +1,4 @@
-import { getClientTypeSettings, saveClientTypes } from "@srpanel/core"
+import { clientTypesBoard, saveClientTypes } from "@srpanel/core"
 import { z } from "zod"
 import { ok, parseBody, route } from "@/lib/api"
 import { requireOwner } from "@/lib/auth"
@@ -19,13 +19,15 @@ const clientTypesInput = z.object({
 	services: z.record(z.string(), z.enum(["BOTH", "LIMITED", "UNLIMITED"])).optional(),
 })
 
+/** defaults + every reseller (with its live usage) + every service, in one round-trip */
 export const GET = route(async () => {
 	await requireOwner()
-	return ok({ settings: await getClientTypeSettings() })
+	return ok(await clientTypesBoard())
 })
 
 export const PUT = route(async (req) => {
 	await requireOwner()
 	const body = await parseBody(req, clientTypesInput)
-	return ok({ settings: await saveClientTypes(body) })
+	await saveClientTypes(body)
+	return ok(await clientTypesBoard())
 })
