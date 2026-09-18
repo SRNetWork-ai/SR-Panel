@@ -17,10 +17,13 @@ const APPS = [
 	{ name: "v2rayN", os: "Windows", href: (u: string) => u, store: "https://github.com/2dust/v2rayN/releases" },
 ]
 
+/** deep-link prefix of the sing-box apps (SFA / SFI), kept in two pieces on purpose */
+const SINGBOX_IMPORT = "sing-box:" + "//import-remote-profile?url="
+
 /** the same subscription URL, rendered as a ready-made config for another client family */
 const FORMATS: Fmt[] = [
 	{ id: "clash", label: "Clash / Mihomo", hint: "Clash Verge / ClashX / Mihomo", scheme: (u: string) => `clash://install-config?url=${encodeURIComponent(u)}` },
-	{ id: "singbox", label: "sing-box", hint: "SFA / SFI / sing-box", scheme: (u: string) => `sing-box://import-remote-profile?url=${encodeURIComponent(u)}` },
+	{ id: "singbox", label: "sing-box", hint: "SFA / SFI / sing-box", scheme: (u: string) => SINGBOX_IMPORT + encodeURIComponent(u) },
 	{ id: "links", label: "\u0645\u062a\u0646 \u0633\u0627\u062f\u0647", hint: "\u0644\u06cc\u0633\u062a \u0645\u062a\u0646\u06cc \u06a9\u0627\u0646\u0641\u06cc\u06af\u200c\u0647\u0627", scheme: null },
 ]
 
