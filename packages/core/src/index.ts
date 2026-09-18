@@ -204,6 +204,17 @@ export {
 	activatePendingStarts,
 	type PendingStart,
 } from "./services/pendingStart"
+// auto-renew: periodic traffic reset (+ optional expiry extension) per client
+export {
+	getAutoRenew,
+	autoRenews,
+	setAutoRenew,
+	clearAutoRenew,
+	runAutoRenew,
+	type AutoRenewRule,
+	type AutoRenewInput,
+	type AutoRenewTick,
+} from "./services/autoRenew"
 // bulk client tools + the clients-page counters (loops over the single-client services)
 export {
 	CLIENT_BULK_MAX,

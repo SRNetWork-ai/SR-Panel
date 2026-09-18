@@ -21,6 +21,7 @@ import {
 	pollTelegram,
 	pruneHistory,
 	pruneLogs,
+	runAutoRenew,
 	runBackup,
 	runReminders,
 	syncServer,
@@ -68,6 +69,16 @@ async function delayedStarts() {
 	}
 }
 
+/** Auto-renew: periodic traffic reset (+ optional expiry extension) per client. */
+async function autoRenew() {
+	try {
+		const r = await runAutoRenew()
+		if (r.reset || r.finished || r.failed) log(`auto-renew: reset=${r.reset} finished=${r.finished} failed=${r.failed}`)
+	} catch (err) {
+		warn("auto renew failed", err)
+	}
+}
+
 async function reminders() {
 	try {
 		const r = await runReminders()
@@ -108,7 +119,7 @@ async function logPrune() {
 	}
 }
 
-/** In-panel updates: periodic check, \u201cnew version\u201d alert and the optional install window. */
+/** In-panel updates: periodic check, “new version” alert and the optional install window. */
 async function autoUpdate() {
 	try {
 		const r = await autoUpdateTick()
@@ -185,7 +196,7 @@ async function main() {
 		new Cron("0 40 3 * * *", { protect: true }, logPrune),
 		// in-panel updates (check / alert / optional install)
 		new Cron("0 25 * * * *", { protect: true }, autoUpdate),
-		// stage 2B \u2014 store
+		// stage 2B — store
 		new Cron("30 * * * * *", { protect: true }, paymentExpiry),
 		new Cron("10 */2 * * * *", { protect: true }, usdtVerify),
 		// automatic FX rate + card-to-card bank bridge
@@ -193,6 +204,8 @@ async function main() {
 		new Cron("40 */2 * * * *", { protect: true }, bankDeposits),
 		// delayed start ("start after first use")
 		new Cron("50 * * * * *", { protect: true }, delayedStarts),
+		// periodic auto-renew (traffic reset + optional expiry extension)
+		new Cron("0 10 * * * *", { protect: true }, autoRenew),
 		// license watch (the job itself honours the 6h re-check interval)
 		new Cron("0 5 * * * *", { protect: true }, licenseWatch),
 	]
@@ -204,11 +217,12 @@ async function main() {
 	await syncAll()
 	await enforce()
 	await delayedStarts()
+	await autoRenew()
 	await refreshRates()
 	await licenseWatch()
 
 	const stop = async () => {
-		log("stopping\u2026")
+		log("stopping…")
 		jobs.forEach((j) => j.stop())
 		botAbort.abort()
 		await Promise.race([Promise.all([bot, shopBots]), new Promise((r) => setTimeout(r, 3000))])

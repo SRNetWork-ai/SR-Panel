@@ -11,6 +11,7 @@ import { useLocale, useT } from "@/lib/i18n"
 import { UsageAreaChart, type UsagePoint } from "@/components/Charts"
 import { QR } from "@/components/QR"
 import { Badge, Button, Card, Input, Modal, Progress, Stat, StatusBadge, useConfirm, useToast } from "@/components/ui"
+import { AutoRenewCard } from "./AutoRenewCard"
 
 type Link_ = { server: string; remark: string; uri: string }
 
@@ -133,6 +134,8 @@ export function ClientDetail({ initial, usage, links }: { initial: ClientDto; us
 					</table>
 				</div>
 			</Card>
+
+			<AutoRenewCard clientId={c.id} />
 
 			<Card title={`${t("cl_links")} (${links.length})`}>
 				{links.length === 0 ? <p className="text-sm text-muted">—</p> : (
