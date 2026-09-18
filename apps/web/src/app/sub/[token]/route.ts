@@ -1,4 +1,4 @@
-import { buildSubscription } from "@srpanel/core"
+import { buildSubscription, detectSubFormat, renderSubscription } from "@srpanel/core"
 import type { NextRequest } from "next/server"
 
 export const dynamic = "force-dynamic"
@@ -20,13 +20,20 @@ function publicBase(req: NextRequest): string {
 }
 
 /**
- * Public subscription endpoint consumed by v2rayNG / Hiddify / Streisand / NekoBox / Shadowrocket.
+ * Public subscription endpoint consumed by v2rayNG / Hiddify / Streisand / NekoBox /
+ * Shadowrocket / Mihomo / sing-box. One URL, four dialects:
  *  - default: base64 body (+ subscription-userinfo headers)
- *  - ?format=links : plain-text list of URIs
+ *  - ?format=links   : plain-text list of URIs
+ *  - ?format=clash   : Clash / Mihomo YAML
+ *  - ?format=singbox : sing-box JSON
  *  - browsers (Accept: text/html) are redirected to the styled page /s/<token>
  *
- * The first URI is always the informational (non-dialable) config that shows quota
- * and expiry inside the app itself.
+ * Without an explicit ?format the User-Agent decides, so importing the very same URL
+ * into Mihomo or SFA already yields a full config.
+ *
+ * In the URI dialects the first entry is the informational (non-dialable) config that
+ * shows quota and expiry inside the app; the full configs leave it out, because a fake
+ * node would join the proxy groups and get picked by url-test.
  */
 export async function GET(req: NextRequest, { params }: { params: Promise<{ token: string }> }) {
 	const { token } = await params
@@ -39,22 +46,29 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ toke
 	const payload = await buildSubscription(token)
 	if (!payload) return new Response("not found", { status: 404 })
 
-	const format = req.nextUrl.searchParams.get("format")
-	const uris = payload.infoUri ? [payload.infoUri, ...payload.links.map((l) => l.uri)] : payload.links.map((l) => l.uri)
-	const body = format === "links" ? uris.join("\n") + "\n" : payload.base64
 	const publicUrl = publicBase(req)
+	const pageUrl = `${publicUrl}/s/${token}`
+	const title = `${payload.brand.name} • ${payload.client.name}`
+	const rendered = renderSubscription(detectSubFormat(req.headers.get("user-agent"), req.nextUrl.searchParams.get("format")), {
+		links: payload.links,
+		base64: payload.base64,
+		infoUri: payload.infoUri,
+		title,
+		group: payload.brand.name,
+		pageUrl,
+	})
 
-	return new Response(body, {
+	return new Response(rendered.body, {
 		status: 200,
 		headers: {
-			"content-type": "text/plain; charset=utf-8",
+			"content-type": rendered.contentType,
 			"cache-control": "no-store",
 			"subscription-userinfo": payload.userInfo,
-			"profile-title": "base64:" + Buffer.from(`${payload.brand.name} • ${payload.client.name}`, "utf8").toString("base64"),
+			"profile-title": "base64:" + Buffer.from(title, "utf8").toString("base64"),
 			"profile-update-interval": "12",
-			"profile-web-page-url": `${publicUrl}/s/${token}`,
+			"profile-web-page-url": pageUrl,
 			...(payload.brand.supportUrl ? { "support-url": payload.brand.supportUrl } : {}),
-			"content-disposition": `attachment; filename="${encodeURIComponent(payload.client.name)}.txt"`,
+			"content-disposition": `attachment; filename="${encodeURIComponent(payload.client.name)}.${rendered.extension}"`,
 		},
 	})
 }
