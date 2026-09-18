@@ -233,3 +233,14 @@ export {
 	type RenderSubscriptionInput,
 	type RenderedSubscription,
 } from "./subscription/formats"
+// owner-managed external nodes / remote subscriptions merged into every client sub
+export {
+	EXTERNAL_LINKS_KEY,
+	externalLinks,
+	saveExternalLink,
+	deleteExternalLink,
+	probeExternalLink,
+	resolveExternalUris,
+	type ExternalLink,
+	type ExternalLinkInput,
+} from "./services/externalLinks"
