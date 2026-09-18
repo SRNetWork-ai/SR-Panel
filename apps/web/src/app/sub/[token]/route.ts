@@ -1,4 +1,4 @@
-import { buildSubscription, detectSubFormat, renderSubscription } from "@srpanel/core"
+import { buildSubscription, detectSubFormat, renderSubscription, resolveExternalUris } from "@srpanel/core"
 import type { NextRequest } from "next/server"
 
 export const dynamic = "force-dynamic"
@@ -17,6 +17,19 @@ function publicBase(req: NextRequest): string {
 	const host = req.headers.get("x-forwarded-host") || req.headers.get("host")
 	const proto = (req.headers.get("x-forwarded-proto") || "http").split(",")[0].trim()
 	return host ? `${proto}://${host}` : req.nextUrl.origin.replace(/\/+$/, "")
+}
+
+/**
+ * Extra nodes the owner added by hand (single URIs or whole remote subscriptions).
+ * A broken remote link must never break a customer's subscription, so every failure
+ * degrades to "no extra nodes".
+ */
+async function extraUris(): Promise<readonly string[]> {
+	try {
+		return (await resolveExternalUris()).uris
+	} catch {
+		return []
+	}
 }
 
 /**
@@ -53,6 +66,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ toke
 		links: payload.links,
 		base64: payload.base64,
 		infoUri: payload.infoUri,
+		extra: await extraUris(),
 		title,
 		group: payload.brand.name,
 		pageUrl,
