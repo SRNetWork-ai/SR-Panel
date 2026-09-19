@@ -14,6 +14,7 @@ import { Badge, Button, Card, Input, Modal, Progress, Stat, StatusBadge, useConf
 import { AutoRenewCard } from "./AutoRenewCard"
 import { ClientHwidCard } from "./ClientHwidCard"
 import { ClientIpsCard } from "./ClientIpsCard"
+import { ClientTargetsCard } from "./ClientTargetsCard"
 
 type Link_ = { server: string; remark: string; uri: string }
 
@@ -65,6 +66,10 @@ export function ClientDetail({ initial, usage, links }: { initial: ClientDto; us
 		} catch (err) {
 			toast.err(err instanceof ApiError ? err.message : t("error_generic"))
 		}
+	}
+	const onTargets = (next: ClientDto) => {
+		setC(next)
+		router.refresh()
 	}
 
 	return (
@@ -136,6 +141,8 @@ export function ClientDetail({ initial, usage, links }: { initial: ClientDto; us
 					</table>
 				</div>
 			</Card>
+
+			<ClientTargetsCard client={c} onChange={onTargets} />
 
 			<div className="grid gap-4 xl:grid-cols-2">
 				<AutoRenewCard clientId={c.id} />
