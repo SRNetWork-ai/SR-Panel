@@ -11,11 +11,13 @@ import type {
 import {
 	addClient as addPanelClient,
 	deleteClient as deletePanelClient,
+	fetchClientIps,
 	fetchClientLinks,
 	fetchOnlineEmails,
 	fetchSubLinks,
 	resetClientTraffic as resetPanelClientTraffic,
 	updateClient as updatePanelClient,
+	wipeClientIps,
 } from "./clients"
 import { MissingEndpointError } from "./errors"
 import { XuiHttpClient } from "./http"
@@ -108,6 +110,14 @@ export class XuiAdapter implements PanelAdapter {
 
 	getOnlineEmails(): Promise<string[]> {
 		return fetchOnlineEmails(this.http)
+	}
+
+	getClientIps(email: string): Promise<string[]> {
+		return fetchClientIps(this.http, email)
+	}
+
+	clearClientIps(email: string): Promise<void> {
+		return wipeClientIps(this.http, email)
 	}
 
 	getClientLinks(email: string): Promise<string[]> {
