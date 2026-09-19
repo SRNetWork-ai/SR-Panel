@@ -215,6 +215,14 @@ export {
 	type AutoRenewInput,
 	type AutoRenewTick,
 } from "./services/autoRenew"
+// the IP record every panel keeps for a client (what limitIp counts)
+export {
+	clientIps,
+	clearClientIps,
+	type ClientIpServer,
+	type ClientIpReport,
+	type ClientIpClearResult,
+} from "./services/clientIps"
 // bulk client tools + the clients-page counters (loops over the single-client services)
 export {
 	CLIENT_BULK_MAX,
