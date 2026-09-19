@@ -11,12 +11,14 @@ import type {
 import {
 	addClient as addPanelClient,
 	deleteClient as deletePanelClient,
+	fetchClientDevices,
 	fetchClientIps,
 	fetchClientLinks,
 	fetchOnlineEmails,
 	fetchSubLinks,
 	resetClientTraffic as resetPanelClientTraffic,
 	updateClient as updatePanelClient,
+	wipeClientDevices,
 	wipeClientIps,
 } from "./clients"
 import { MissingEndpointError } from "./errors"
@@ -118,6 +120,14 @@ export class XuiAdapter implements PanelAdapter {
 
 	clearClientIps(email: string): Promise<void> {
 		return wipeClientIps(this.http, email)
+	}
+
+	getClientDevices(email: string): Promise<string[]> {
+		return fetchClientDevices(this.http, email)
+	}
+
+	clearClientDevices(email: string): Promise<void> {
+		return wipeClientDevices(this.http, email)
 	}
 
 	getClientLinks(email: string): Promise<string[]> {

@@ -150,6 +150,9 @@ export interface PanelAdapter {
 	getClientIps(email: string): Promise<string[]>
 	/** Wipes that record so the next connections repopulate it ("release the devices"). */
 	clearClientIps(email: string): Promise<void>
+	/** Device (HWID) records behind limitHwid - empty on builds without the feature. */
+	getClientDevices(email: string): Promise<string[]>
+	clearClientDevices(email: string): Promise<void>
 	getClientLinks(email: string): Promise<string[]>
 	getSubLinks(subId: string): Promise<string[]>
 }

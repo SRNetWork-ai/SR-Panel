@@ -62,14 +62,16 @@ export function groupLinks(links: ClientWithServers["servers"]): LinkGroup[] {
 /**
  * `expiryMsOverride` carries the delayed-start value: 3x-ui counts a negative
  * expiryTime from the client's first connection instead of from now.
+ * `limitHwid` is the Setting-backed device limit (0 = unlimited).
  */
-export function provisionInput(client: Client, remoteEmail: string, flow: string, subId: string, expiryMsOverride?: number): ProvisionClientInput {
+export function provisionInput(client: Client, remoteEmail: string, flow: string, subId: string, expiryMsOverride?: number, limitHwid?: number): ProvisionClientInput {
 	return {
 		uuid: client.uuid,
 		email: remoteEmail,
 		totalBytes: Number(client.trafficLimit),
 		expiryTimeMs: expiryMsOverride !== undefined ? expiryMsOverride : client.expiresAt ? client.expiresAt.getTime() : 0,
 		limitIp: client.ipLimit,
+		limitHwid: Number(limitHwid) || 0,
 		enable: client.status !== "DISABLED",
 		subId,
 		flow,
