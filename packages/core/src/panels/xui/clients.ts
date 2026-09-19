@@ -137,6 +137,54 @@ export async function fetchOnlineEmails(http: XuiHttpClient): Promise<string[]> 
 	return Array.isArray(list) ? list.map(String) : []
 }
 
+const cleanIps = (list: string[]): string[] => [...new Set(list.map((s) => s.trim()).filter(Boolean))]
+
+/**
+ * The IP record is the least standardised answer in 3x-ui: depending on the build it
+ * is a JSON array, a newline separated blob or the literal string "No IP Record".
+ */
+export function parseIpList(raw: unknown): string[] {
+	if (raw === null || raw === undefined) return []
+	if (Array.isArray(raw)) return cleanIps(raw.map(String))
+	if (typeof raw === "object") {
+		const inner = (raw as Record<string, unknown>).ips ?? (raw as Record<string, unknown>).clientIps
+		return inner === undefined ? [] : parseIpList(inner)
+	}
+	const text = String(raw).trim()
+	if (!text || /^no\s*ip/i.test(text)) return []
+	if (text.startsWith("[")) {
+		try {
+			const parsed: unknown = JSON.parse(text)
+			if (Array.isArray(parsed)) return cleanIps(parsed.map(String))
+		} catch {
+			/* not JSON after all - fall through to the plain-text split */
+		}
+	}
+	return cleanIps(text.split(/[\s,;]+/))
+}
+
+/** Source IPs the panel logged for one client (what limitIp counts). */
+export async function fetchClientIps(http: XuiHttpClient, email: string): Promise<string[]> {
+	try {
+		const raw = await http.attempt<unknown>([
+			() => http.call<unknown>(`/panel/api/clients/ips/${encodeURIComponent(email)}`, { method: "POST" }),
+			() => http.call<unknown>(`/panel/api/inbounds/clientIps/${encodeURIComponent(email)}`, { method: "POST" }),
+		])
+		return parseIpList(raw)
+	} catch (err) {
+		if (err instanceof MissingEndpointError) return []
+		throw err
+	}
+}
+
+/** Drops that record; the client can reconnect from fresh devices right away. */
+export async function wipeClientIps(http: XuiHttpClient, email: string): Promise<void> {
+	await http.attempt([
+		() => http.call(`/panel/api/clients/clearIps/${encodeURIComponent(email)}`, { method: "POST" }),
+		() => http.call(`/panel/api/inbounds/clearClientIps/${encodeURIComponent(email)}`, { method: "POST" }),
+	])
+}
+
 /** Every share URL of one client across the inbounds it is attached to (v3 only). */
 export async function fetchClientLinks(http: XuiHttpClient, email: string): Promise<string[]> {
 	try {

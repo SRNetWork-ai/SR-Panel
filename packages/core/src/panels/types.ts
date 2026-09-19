@@ -146,6 +146,10 @@ export interface PanelAdapter {
 	deleteClient(inboundIds: number | number[], protocol: InboundProtocol, client: { uuid: string; email: string }): Promise<void>
 	resetClientTraffic(inboundId: number, email: string): Promise<void>
 	getOnlineEmails(): Promise<string[]>
+	/** Source IPs the panel currently has on record for one client - the input of limitIp. */
+	getClientIps(email: string): Promise<string[]>
+	/** Wipes that record so the next connections repopulate it ("release the devices"). */
+	clearClientIps(email: string): Promise<void>
 	getClientLinks(email: string): Promise<string[]>
 	getSubLinks(subId: string): Promise<string[]>
 }
