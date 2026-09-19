@@ -2,6 +2,7 @@ import { clientTypeAccess, listClients, listServices } from "@srpanel/core"
 import { requireAdmin } from "@/lib/auth"
 import { publicUrl, toClientDto, toServiceDto } from "@/lib/dto"
 import { ClientsClient } from "./ClientsClient"
+import { ClientsImportExportCard } from "./ClientsImportExportCard"
 
 export const dynamic = "force-dynamic"
 
@@ -15,12 +16,15 @@ export default async function ClientsPage({ searchParams }: { searchParams: Prom
 	])
 	const base = publicUrl()
 	return (
-		<ClientsClient
-			initial={{ items: items.map((c) => toClientDto(c, base)), total }}
-			services={services.map(toServiceDto)}
-			access={access}
-			openNew={sp.new === "1"}
-			isOwner={admin.role === "OWNER"}
-		/>
+		<div className="space-y-4">
+			<ClientsClient
+				initial={{ items: items.map((c) => toClientDto(c, base)), total }}
+				services={services.map(toServiceDto)}
+				access={access}
+				openNew={sp.new === "1"}
+				isOwner={admin.role === "OWNER"}
+			/>
+			<ClientsImportExportCard />
+		</div>
 	)
 }
