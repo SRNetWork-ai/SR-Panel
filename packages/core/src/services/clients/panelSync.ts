@@ -3,6 +3,7 @@ import type { InboundProtocol } from "../../panels/types"
 import { resolveFlow } from "../../subscription/links"
 import { AppError } from "../../util/errors"
 import { remoteSubId } from "../../util/naming"
+import { getHwidLimit } from "../hwidLimit"
 import { getPendingStart, pendingExpiryMs } from "../pendingStart"
 import { adapterFor, inboundsOf } from "../servers"
 import { groupLinks, provisionInput } from "./grouping"
@@ -15,14 +16,14 @@ import { COLLISION, PANEL_ATTEMPTS, type ClientWithServers, type LinkGroup, type
  * from the group, but two customers may well carry the same name, so on a collision we
  * retry with a fresh salt / a numeric suffix instead of leaving the group unprovisioned.
  */
-export async function addToPanel(group: PanelGroup, client: Client, baseEmail: string, expiryMsOverride?: number): Promise<string> {
+export async function addToPanel(group: PanelGroup, client: Client, baseEmail: string, expiryMsOverride?: number, limitHwid?: number): Promise<string> {
 	const { server, protocol, flow, inboundIds } = group
 	let email = baseEmail
 	let last: unknown
 	for (let attempt = 0; attempt < PANEL_ATTEMPTS; attempt++) {
 		const subId = remoteSubId(client.subToken, server.id, inboundIds[0]!, attempt ? `r${attempt}` : "")
 		try {
-			await adapterFor(server).addClient(inboundIds, protocol, provisionInput(client, email, flow, subId, expiryMsOverride))
+			await adapterFor(server).addClient(inboundIds, protocol, provisionInput(client, email, flow, subId, expiryMsOverride, limitHwid))
 			return email
 		} catch (err) {
 			last = err
@@ -40,12 +41,12 @@ export async function addToPanel(group: PanelGroup, client: Client, baseEmail: s
 }
 
 /** The email never changes on update, but the derived subId may still hit another client. */
-export async function updateOnPanel(server: Server, group: LinkGroup, client: Client, protocol: InboundProtocol, flow: string, expiryMsOverride?: number): Promise<void> {
+export async function updateOnPanel(server: Server, group: LinkGroup, client: Client, protocol: InboundProtocol, flow: string, expiryMsOverride?: number, limitHwid?: number): Promise<void> {
 	let last: unknown
 	for (let attempt = 0; attempt < PANEL_ATTEMPTS; attempt++) {
 		const subId = remoteSubId(client.subToken, server.id, group.inboundIds[0]!, attempt ? `r${attempt}` : "")
 		try {
-			await adapterFor(server).updateClient(group.inboundIds, protocol, provisionInput(client, group.remoteEmail, flow, subId, expiryMsOverride))
+			await adapterFor(server).updateClient(group.inboundIds, protocol, provisionInput(client, group.remoteEmail, flow, subId, expiryMsOverride, limitHwid))
 			return
 		} catch (err) {
 			last = err
@@ -70,6 +71,8 @@ export async function pushClient(client: ClientWithServers): Promise<string[]> {
 	// a client whose period has not started yet keeps its negative panel expiry
 	const pending = pendingExpiryMs(await getPendingStart(client.id))
 	const expiryMsOverride = pending === null ? undefined : pending
+	// Setting-backed device limit, pushed together with the rest of the client row
+	const limitHwid = await getHwidLimit(client.id)
 	const servers = await prisma.server.findMany({ where: { id: { in: [...new Set(client.servers.map((s) => s.serverId))] } } })
 	for (const group of groupLinks(client.servers)) {
 		const server = servers.find((s) => s.id === group.serverId)
@@ -77,7 +80,7 @@ export async function pushClient(client: ClientWithServers): Promise<string[]> {
 		const inbound = inboundsOf(server).find((i) => i.id === group.inboundIds[0])
 		try {
 			const flow = inbound ? resolveFlow(inbound, client.uuid) : ""
-			await updateOnPanel(server, group, client, inbound?.protocol ?? "vless", flow, expiryMsOverride)
+			await updateOnPanel(server, group, client, inbound?.protocol ?? "vless", flow, expiryMsOverride, limitHwid)
 			await prisma.clientServer.updateMany({ where: { id: { in: group.linkIds } }, data: { lastError: null } })
 		} catch (err) {
 			const message = err instanceof Error ? err.message : String(err)

@@ -223,6 +223,17 @@ export {
 	type ClientIpReport,
 	type ClientIpClearResult,
 } from "./services/clientIps"
+// per-client device limit (limitHwid), Setting-backed like the timers above
+export { HWID_MAX, clampHwid, getHwidLimit, hwidLimits, writeHwidLimit } from "./services/hwidLimit"
+export {
+	clientDevices,
+	setClientHwidLimit,
+	clearClientDevices,
+	type ClientDeviceServer,
+	type ClientDeviceReport,
+	type ClientHwidResult,
+	type ClientDeviceClearResult,
+} from "./services/clientHwid"
 // bulk client tools + the clients-page counters (loops over the single-client services)
 export {
 	CLIENT_BULK_MAX,

@@ -137,7 +137,7 @@ export async function fetchOnlineEmails(http: XuiHttpClient): Promise<string[]> 
 	return Array.isArray(list) ? list.map(String) : []
 }
 
-const cleanIps = (list: string[]): string[] => [...new Set(list.map((s) => s.trim()).filter(Boolean))]
+const cleanList = (list: string[]): string[] => [...new Set(list.map((s) => s.trim()).filter(Boolean))]
 
 /**
  * The IP record is the least standardised answer in 3x-ui: depending on the build it
@@ -145,7 +145,7 @@ const cleanIps = (list: string[]): string[] => [...new Set(list.map((s) => s.tri
  */
 export function parseIpList(raw: unknown): string[] {
 	if (raw === null || raw === undefined) return []
-	if (Array.isArray(raw)) return cleanIps(raw.map(String))
+	if (Array.isArray(raw)) return cleanList(raw.map(String))
 	if (typeof raw === "object") {
 		const inner = (raw as Record<string, unknown>).ips ?? (raw as Record<string, unknown>).clientIps
 		return inner === undefined ? [] : parseIpList(inner)
@@ -155,12 +155,12 @@ export function parseIpList(raw: unknown): string[] {
 	if (text.startsWith("[")) {
 		try {
 			const parsed: unknown = JSON.parse(text)
-			if (Array.isArray(parsed)) return cleanIps(parsed.map(String))
+			if (Array.isArray(parsed)) return cleanList(parsed.map(String))
 		} catch {
 			/* not JSON after all - fall through to the plain-text split */
 		}
 	}
-	return cleanIps(text.split(/[\s,;]+/))
+	return cleanList(text.split(/[\s,;]+/))
 }
 
 /** Source IPs the panel logged for one client (what limitIp counts). */
@@ -183,6 +183,67 @@ export async function wipeClientIps(http: XuiHttpClient, email: string): Promise
 		() => http.call(`/panel/api/clients/clearIps/${encodeURIComponent(email)}`, { method: "POST" }),
 		() => http.call(`/panel/api/inbounds/clearClientIps/${encodeURIComponent(email)}`, { method: "POST" }),
 	])
+}
+
+/** A device row may be a bare hwid string or an object carrying ip/ua/lastSeen too. */
+function deviceId(value: unknown): string {
+	if (value === null || value === undefined) return ""
+	if (typeof value === "object") {
+		const o = value as Record<string, unknown>
+		const id = o.hwid ?? o.deviceId ?? o.device ?? o.id ?? o.name
+		return id === undefined ? "" : String(id)
+	}
+	return String(value)
+}
+
+export function parseDeviceList(raw: unknown): string[] {
+	if (raw === null || raw === undefined) return []
+	if (Array.isArray(raw)) return cleanList(raw.map(deviceId))
+	if (typeof raw === "object") {
+		const o = raw as Record<string, unknown>
+		const inner = o.devices ?? o.hwids ?? o.clientDevices
+		return inner === undefined ? cleanList([deviceId(o)]) : parseDeviceList(inner)
+	}
+	const text = String(raw).trim()
+	if (!text || /^no\s*(device|hwid|record)/i.test(text)) return []
+	if (text.startsWith("[")) {
+		try {
+			const parsed: unknown = JSON.parse(text)
+			if (Array.isArray(parsed)) return cleanList(parsed.map(deviceId))
+		} catch {
+			/* plain text after all */
+		}
+	}
+	return cleanList(text.split(/[\s,;]+/))
+}
+
+/** Devices (HWIDs) the panel bound to one client. Empty on builds without the feature. */
+export async function fetchClientDevices(http: XuiHttpClient, email: string): Promise<string[]> {
+	try {
+		const raw = await http.attempt<unknown>([
+			() => http.call<unknown>(`/panel/api/clients/devices/${encodeURIComponent(email)}`, { method: "POST" }),
+			() => http.call<unknown>(`/panel/api/clients/hwids/${encodeURIComponent(email)}`, { method: "POST" }),
+			() => http.call<unknown>(`/panel/api/inbounds/clientDevices/${encodeURIComponent(email)}`, { method: "POST" }),
+		])
+		return parseDeviceList(raw)
+	} catch (err) {
+		if (err instanceof MissingEndpointError) return []
+		throw err
+	}
+}
+
+/** Releases the bound devices so the customer can pair a new phone/laptop. */
+export async function wipeClientDevices(http: XuiHttpClient, email: string): Promise<void> {
+	try {
+		await http.attempt([
+			() => http.call(`/panel/api/clients/clearDevices/${encodeURIComponent(email)}`, { method: "POST" }),
+			() => http.call(`/panel/api/clients/clearHwids/${encodeURIComponent(email)}`, { method: "POST" }),
+			() => http.call(`/panel/api/inbounds/clearClientDevices/${encodeURIComponent(email)}`, { method: "POST" }),
+		])
+	} catch (err) {
+		if (err instanceof MissingEndpointError) throw new PanelError("این نسخه از پنل، مدیریت دستگاه (HWID) ندارد")
+		throw err
+	}
 }
 
 /** Every share URL of one client across the inbounds it is attached to (v3 only). */

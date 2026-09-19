@@ -12,6 +12,7 @@ import { UsageAreaChart, type UsagePoint } from "@/components/Charts"
 import { QR } from "@/components/QR"
 import { Badge, Button, Card, Input, Modal, Progress, Stat, StatusBadge, useConfirm, useToast } from "@/components/ui"
 import { AutoRenewCard } from "./AutoRenewCard"
+import { ClientHwidCard } from "./ClientHwidCard"
 import { ClientIpsCard } from "./ClientIpsCard"
 
 type Link_ = { server: string; remark: string; uri: string }
@@ -139,6 +140,7 @@ export function ClientDetail({ initial, usage, links }: { initial: ClientDto; us
 			<div className="grid gap-4 xl:grid-cols-2">
 				<AutoRenewCard clientId={c.id} />
 				<ClientIpsCard clientId={c.id} ipLimit={c.ipLimit} />
+				<ClientHwidCard clientId={c.id} />
 			</div>
 
 			<Card title={`${t("cl_links")} (${links.length})`}>
