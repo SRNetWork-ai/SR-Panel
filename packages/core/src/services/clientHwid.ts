@@ -2,7 +2,7 @@ import { prisma, type Admin } from "@srpanel/db"
 import { audit } from "./audit"
 import { getClientForActor, pushClient } from "./clients"
 import type { ClientWithServers } from "./clients/types"
-import { writeHwidLimit } from "./hwidLimit"
+import { getHwidLimit, writeHwidLimit } from "./hwidLimit"
 import { adapterFor } from "./servers"
 
 /**
@@ -50,7 +50,6 @@ const serversOf = (targets: Array<{ serverId: string }>) =>
 
 export async function clientDevices(actor: Pick<Admin, "id" | "role">, clientId: string): Promise<ClientDeviceReport> {
 	const client = await getClientForActor(actor, clientId)
-	const { getHwidLimit } = await import("./hwidLimit")
 	const targets = remoteTargets(client)
 	const servers = await serversOf(targets)
 	const rows: ClientDeviceServer[] = []
